@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import streamlit as st
-import streamlit.components.v1 as components
 
 from src.networks import TOPOLOGIES, generate_network
 from src.plots import (
@@ -15,13 +14,19 @@ from src.plots import (
     plot_network_snapshot,
     plot_sweep,
 )
-from src.simulation import run_beta_sweep, run_simulation, run_theta_sweep
+from src.simulation import (
+    INFECTED,
+    SUSCEPTIBLE,
+    run_beta_sweep,
+    run_simulation,
+    run_theta_sweep,
+)
 from src.web_stage import build_stage_html
 
 
 BETA_SWEEP = [0.1, 0.2, 0.3, 0.4, 0.5]
 THETA_SWEEP = [0.1, 0.25, 0.4]
-APP_STATE_VERSION = 3
+APP_STATE_VERSION = 4
 
 
 def main() -> None:
@@ -380,6 +385,7 @@ def _run_model(params: dict) -> dict:
         "beta_sweep": beta_sweep,
         "theta_sweep": theta_sweep,
         "topology": params["topology"],
+        "params": params.copy(),
     }
 
 
@@ -420,19 +426,19 @@ def _show_dynamic_simulation(
 ) -> None:
     html = build_stage_html(graph, result, pos, topology, visual_theme)
     if stage_width >= 100:
-        components.html(html, height=stage_height, scrolling=False)
+        st.iframe(html, height=stage_height)
         return
 
     side_width = (100 - stage_width) / 2
     left, center, right = st.columns([side_width, stage_width, side_width])
     with center:
-        components.html(html, height=stage_height, scrolling=False)
+        st.iframe(html, height=stage_height)
 
 
 def _show_analysis_tabs(graph, result, pos, payload) -> None:
     st.markdown('<div class="section-label">Analysis</div>', unsafe_allow_html=True)
-    overview_tab, snapshots_tab, sweeps_tab, export_tab = st.tabs(
-        ["Overview", "Snapshots", "Parameter sweeps", "Export"]
+    overview_tab, snapshots_tab, sweeps_tab, math_tab, export_tab = st.tabs(
+        ["Overview", "Snapshots", "Parameter sweeps", "Mathematics", "Export"]
     )
 
     with overview_tab:
@@ -444,6 +450,9 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
 
     with sweeps_tab:
         _show_sweeps(payload["beta_sweep"], payload["theta_sweep"])
+
+    with math_tab:
+        _show_model_math(graph, result, payload["params"])
 
     with export_tab:
         _show_export_button(graph, result, pos)
@@ -472,6 +481,303 @@ def _show_sweeps(beta_sweep, theta_sweep) -> None:
         left, right = st.columns(2)
         left.dataframe(beta_sweep, width="stretch", hide_index=True)
         right.dataframe(theta_sweep, width="stretch", hide_index=True)
+
+
+def _show_model_math(graph, result, params: dict) -> None:
+    st.subheader("Model mathematics")
+    st.caption(
+        "The equations below are the actual update rules used by the simulator. "
+        "All node transitions are synchronous: every node reads the state at t "
+        "before the app writes state t+1."
+    )
+
+    _show_current_math_context(graph, result, params)
+
+    st.markdown("#### Common notation")
+    st.latex(r"m_i(t)=\sum_{j \in \mathcal{N}(i)} \mathbf{1}\{x_j(t)=I\}")
+    st.latex(r"k_i=|\mathcal{N}(i)|,\qquad \epsilon=\mathrm{external\_noise}")
+    st.markdown(
+        "`m_i(t)` is the number of infected neighbors of node `i`; `k_i` is "
+        "its degree. The random draw is evaluated independently for each node "
+        "at each step."
+    )
+
+    sir_tab, sis_tab, seir_tab, threshold_tab = st.tabs(
+        ["SIR", "SIS", "SEIR", "Threshold"]
+    )
+    with sir_tab:
+        _show_simple_model_math(
+            title="Simple contagion: SIR",
+            transition_text=(
+                "State path: `S -> I -> R`. Recovered nodes remain recovered."
+            ),
+            exposed=False,
+            sis=False,
+        )
+    with sis_tab:
+        _show_simple_model_math(
+            title="Simple contagion: SIS",
+            transition_text=(
+                "State path: `S -> I -> S`. Recovery returns a node to "
+                "susceptibility."
+            ),
+            exposed=False,
+            sis=True,
+        )
+    with seir_tab:
+        _show_simple_model_math(
+            title="Simple contagion: SEIR",
+            transition_text=(
+                "State path: `S -> E -> I -> R`. New contagions become "
+                "exposed before activation."
+            ),
+            exposed=True,
+            sis=False,
+        )
+    with threshold_tab:
+        _show_threshold_model_math(params)
+
+
+def _show_current_math_context(graph, result, params: dict) -> None:
+    peak_step = int(result.metrics["peak_index"])
+    profile = _contagion_profile(graph, result.states[peak_step], params)
+    average_degree = _average_degree(graph)
+    infectious_steps = _expected_steps(params["gamma"])
+    exposed_steps = _expected_steps(params["sigma"])
+    vulnerable_fraction = _one_neighbor_vulnerable_fraction(graph, params["theta"])
+
+    st.markdown("#### Current run")
+    cols = st.columns(4)
+    cols[0].metric("Average degree", f"{average_degree:.2f}")
+    cols[1].metric("Expected I steps", _format_steps(infectious_steps))
+    cols[2].metric(
+        "Peak-step infection p",
+        f"{profile['mean_infection_probability']:.1%}",
+    )
+    cols[3].metric("1-neighbor vulnerable", f"{vulnerable_fraction:.1%}")
+
+    if params["model"] == "simple":
+        rough_r = (
+            float("inf")
+            if params["gamma"] <= 0
+            else params["beta"] * average_degree / params["gamma"]
+        )
+        st.info(
+            "For the selected simple model, a rough early-spread heuristic is "
+            f"beta * average_degree / gamma = {_format_float_or_inf(rough_r)}. "
+            "It is a presentation aid, not a replacement for the network simulation."
+        )
+    else:
+        st.info(
+            "For the selected threshold model, adoption is deterministic once "
+            "the infected-neighbor fraction reaches theta; external noise only "
+            "matters below that threshold."
+        )
+
+    parameter_rows = [
+        {
+            "Parameter": "model",
+            "Current value": params["model"],
+            "Meaning": "Simple probabilistic or threshold contagion",
+        },
+        {
+            "Parameter": "variant",
+            "Current value": result.variant,
+            "Meaning": "SIR, SIS, SEIR, or threshold",
+        },
+        {
+            "Parameter": "beta",
+            "Current value": f"{params['beta']:.2f}",
+            "Meaning": "Per-neighbor transmission probability in simple contagion",
+        },
+        {
+            "Parameter": "sigma",
+            "Current value": f"{params['sigma']:.2f}",
+            "Meaning": "E -> I activation probability in SEIR",
+        },
+        {
+            "Parameter": "theta",
+            "Current value": f"{params['theta']:.2f}",
+            "Meaning": "Required infected-neighbor fraction in threshold contagion",
+        },
+        {
+            "Parameter": "gamma",
+            "Current value": f"{params['gamma']:.2f}",
+            "Meaning": "I recovery probability per step",
+        },
+        {
+            "Parameter": "external_noise",
+            "Current value": f"{params['external_noise']:.3f}",
+            "Meaning": "Outside adoption probability when contagion does not trigger",
+        },
+        {
+            "Parameter": "random_seed",
+            "Current value": str(params["random_seed"]),
+            "Meaning": "Controls reproducible network and random draws",
+        },
+    ]
+    st.dataframe(parameter_rows, width="stretch", hide_index=True)
+
+    with st.expander("Peak-step pressure details"):
+        detail_cols = st.columns(4)
+        detail_cols[0].metric("Susceptible nodes", f"{profile['susceptible_count']:,}")
+        detail_cols[1].metric(
+            "Mean infected neighbors",
+            f"{profile['mean_infected_neighbors']:.2f}",
+        )
+        detail_cols[2].metric(
+            "Mean infected-neighbor share",
+            f"{profile['mean_neighbor_fraction']:.1%}",
+        )
+        detail_cols[3].metric(
+            "Threshold-ready S nodes",
+            f"{profile['threshold_ready_fraction']:.1%}",
+        )
+
+        st.markdown(
+            "These values are computed at the peak infected step. They show how "
+            "much adoption pressure the current network structure creates, not "
+            "just which slider values were chosen."
+        )
+
+    if params["model"] == "simple" and params["simple_variant"] == "SEIR":
+        st.caption(
+            "With the current sigma, expected exposed waiting time is "
+            f"{_format_steps(exposed_steps)}."
+        )
+
+
+def _show_simple_model_math(
+    title: str,
+    transition_text: str,
+    exposed: bool,
+    sis: bool,
+) -> None:
+    st.markdown(f"#### {title}")
+    st.markdown(transition_text)
+    st.latex(r"q_i(t)=1-(1-\beta)^{m_i(t)}")
+
+    if exposed:
+        st.latex(r"P(S_i \rightarrow E)=q_i(t)+(1-q_i(t))\epsilon")
+        st.latex(r"P(E_i \rightarrow I)=\sigma")
+        st.latex(r"P(I_i \rightarrow R)=\gamma")
+    elif sis:
+        st.latex(r"P(S_i \rightarrow I)=q_i(t)+(1-q_i(t))\epsilon")
+        st.latex(r"P(I_i \rightarrow S)=\gamma")
+    else:
+        st.latex(r"P(S_i \rightarrow I)=q_i(t)+(1-q_i(t))\epsilon")
+        st.latex(r"P(I_i \rightarrow R)=\gamma")
+
+    st.markdown(
+        "The term `1 - (1 - beta)^m` means each infected neighbor gets one "
+        "independent chance to transmit. If neighbor contagion fails, the "
+        "external-noise draw can still create adoption."
+    )
+
+
+def _show_threshold_model_math(params: dict) -> None:
+    st.markdown("#### Complex contagion: threshold")
+    st.markdown(
+        "State path: `S -> I -> R`. Adoption needs enough infected neighbors "
+        "at the same time."
+    )
+    st.latex(
+        r"P(S_i \rightarrow I)=\begin{cases}"
+        r"1, & k_i>0 \ \mathrm{and}\ \frac{m_i(t)}{k_i}\geq\theta\\"
+        r"\epsilon, & \mathrm{otherwise}"
+        r"\end{cases}"
+    )
+    st.latex(r"P(I_i \rightarrow R)=\gamma")
+    st.markdown(
+        "For a node with degree `k`, a single infected neighbor is sufficient "
+        f"only when `1 / k >= theta`. With the current theta={params['theta']:.2f}, "
+        "high-degree nodes usually need several infected neighbors at once."
+    )
+
+
+def _contagion_profile(graph, state, params: dict) -> dict[str, float]:
+    susceptible_nodes = [node for node in graph.nodes if int(state[node]) == SUSCEPTIBLE]
+    if not susceptible_nodes:
+        return {
+            "susceptible_count": 0,
+            "mean_infected_neighbors": 0.0,
+            "mean_neighbor_fraction": 0.0,
+            "mean_infection_probability": 0.0,
+            "threshold_ready_fraction": 0.0,
+        }
+
+    infected_neighbor_counts = []
+    neighbor_fractions = []
+    infection_probabilities = []
+    threshold_ready = 0
+
+    for node in susceptible_nodes:
+        degree = graph.degree[node]
+        infected_neighbors = sum(
+            1 for neighbor in graph.neighbors(node)
+            if int(state[neighbor]) == INFECTED
+        )
+        infected_neighbor_counts.append(infected_neighbors)
+        neighbor_fractions.append(infected_neighbors / degree if degree else 0.0)
+        is_threshold_ready = (
+            degree > 0 and infected_neighbors / degree >= params["theta"]
+        )
+        threshold_ready += int(is_threshold_ready)
+
+        if params["model"] == "simple":
+            neighbor_probability = 1.0 - (1.0 - params["beta"]) ** infected_neighbors
+            infection_probability = (
+                neighbor_probability
+                + (1.0 - neighbor_probability) * params["external_noise"]
+            )
+        else:
+            infection_probability = 1.0 if is_threshold_ready else params["external_noise"]
+
+        infection_probabilities.append(infection_probability)
+
+    susceptible_count = len(susceptible_nodes)
+    return {
+        "susceptible_count": susceptible_count,
+        "mean_infected_neighbors": sum(infected_neighbor_counts) / susceptible_count,
+        "mean_neighbor_fraction": sum(neighbor_fractions) / susceptible_count,
+        "mean_infection_probability": sum(infection_probabilities) / susceptible_count,
+        "threshold_ready_fraction": threshold_ready / susceptible_count,
+    }
+
+
+def _average_degree(graph) -> float:
+    if graph.number_of_nodes() == 0:
+        return 0.0
+    return 2.0 * graph.number_of_edges() / graph.number_of_nodes()
+
+
+def _expected_steps(probability: float) -> float:
+    if probability <= 0:
+        return float("inf")
+    return 1.0 / probability
+
+
+def _one_neighbor_vulnerable_fraction(graph, theta: float) -> float:
+    nodes = list(graph.nodes)
+    if not nodes:
+        return 0.0
+    vulnerable = sum(
+        1 for node in nodes
+        if graph.degree[node] > 0 and 1.0 / graph.degree[node] >= theta
+    )
+    return vulnerable / len(nodes)
+
+
+def _format_steps(value: float) -> str:
+    if value == float("inf"):
+        return "infinite"
+    return f"{value:.1f}"
+
+
+def _format_float_or_inf(value: float) -> str:
+    if value == float("inf"):
+        return "infinite"
+    return f"{value:.2f}"
 
 
 def _show_export_button(graph, result, pos) -> None:
