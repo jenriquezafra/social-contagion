@@ -5,7 +5,7 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import streamlit as st
 
-from src.networks import TOPOLOGIES, generate_network
+from src.networks import DIRECTED_INFLUENCERS, TOPOLOGIES, generate_network
 from src.plots import (
     compute_layout,
     figure_to_png_bytes,
@@ -26,7 +26,7 @@ from src.web_stage import build_stage_html
 
 BETA_SWEEP = [0.1, 0.2, 0.3, 0.4, 0.5]
 THETA_SWEEP = [0.1, 0.25, 0.4]
-APP_STATE_VERSION = 4
+APP_STATE_VERSION = 5
 
 
 def main() -> None:
@@ -78,6 +78,15 @@ def _sidebar_controls() -> dict:
     n_nodes = st.sidebar.slider("Number of nodes", 20, 500, 150, 10)
     average_degree = st.sidebar.slider("Average degree", 1, 30, 6, 1)
     topology = st.sidebar.selectbox("Topology", TOPOLOGIES)
+    influencer_fraction = 0.06
+    if topology == DIRECTED_INFLUENCERS:
+        influencer_fraction = st.sidebar.slider(
+            "Influencer fraction",
+            0.01,
+            0.25,
+            0.06,
+            0.01,
+        )
 
     st.sidebar.header("Initial condition")
     initial_infected = st.sidebar.slider(
@@ -104,6 +113,7 @@ def _sidebar_controls() -> dict:
         "n_nodes": n_nodes,
         "average_degree": average_degree,
         "topology": topology,
+        "influencer_fraction": influencer_fraction,
         "initial_infected": initial_infected,
         "seed_mode": seed_mode,
         "max_steps": max_steps,
@@ -324,7 +334,7 @@ def _show_header() -> None:
         <div class="hero-panel">
             <div class="hero-kicker">Complex Systems Studio</div>
             <h1>Social Contagion Simulator</h1>
-            <p>Model cascades across random, small-world and scale-free networks with a polished interactive simulation built for presentation.</p>
+            <p>Model cascades across random, small-world, scale-free and directed influencer networks with a polished interactive simulation built for presentation.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -337,6 +347,7 @@ def _run_model(params: dict) -> dict:
         average_degree=params["average_degree"],
         topology=params["topology"],
         random_seed=params["random_seed"],
+        influencer_fraction=params["influencer_fraction"],
     )
     pos = compute_layout(graph, params["random_seed"])
 
@@ -494,13 +505,26 @@ def _show_model_math(graph, result, params: dict) -> None:
     _show_current_math_context(graph, result, params)
 
     st.markdown("#### Common notation")
-    st.latex(r"m_i(t)=\sum_{j \in \mathcal{N}(i)} \mathbf{1}\{x_j(t)=I\}")
-    st.latex(r"k_i=|\mathcal{N}(i)|,\qquad \epsilon=\mathrm{external\_noise}")
+    neighborhood = r"\mathcal{N}^{-}(i)" if graph.is_directed() else r"\mathcal{N}(i)"
+    degree_text = "incoming degree" if graph.is_directed() else "degree"
+    st.latex(
+        fr"m_i(t)=\sum_{{j \in {neighborhood}}} "
+        r"\mathbf{1}\{x_j(t)=I\}"
+    )
+    st.latex(
+        fr"k_i=|{neighborhood}|,\qquad "
+        r"\epsilon=\mathrm{external\_noise}"
+    )
     st.markdown(
         "`m_i(t)` is the number of infected neighbors of node `i`; `k_i` is "
-        "its degree. The random draw is evaluated independently for each node "
-        "at each step."
+        f"its {degree_text}. The random draw is evaluated independently for "
+        "each node at each step."
     )
+    if graph.is_directed():
+        st.caption(
+            "For directed influence graphs, neighbors mean incoming predecessors: "
+            "an edge `u -> v` lets `u` influence `v`, not the reverse."
+        )
 
     sir_tab, sis_tab, seir_tab, threshold_tab = st.tabs(
         ["SIR", "SIS", "SEIR", "Threshold"]
@@ -545,16 +569,21 @@ def _show_current_math_context(graph, result, params: dict) -> None:
     infectious_steps = _expected_steps(params["gamma"])
     exposed_steps = _expected_steps(params["sigma"])
     vulnerable_fraction = _one_neighbor_vulnerable_fraction(graph, params["theta"])
+    degree_label = "Avg in-degree" if graph.is_directed() else "Average degree"
 
     st.markdown("#### Current run")
-    cols = st.columns(4)
-    cols[0].metric("Average degree", f"{average_degree:.2f}")
-    cols[1].metric("Expected I steps", _format_steps(infectious_steps))
-    cols[2].metric(
+    cols = st.columns(5 if graph.is_directed() else 4)
+    cols[0].metric(degree_label, f"{average_degree:.2f}")
+    metric_offset = 0
+    if graph.is_directed():
+        cols[1].metric("Influencers", f"{_influencer_count(graph):,}")
+        metric_offset = 1
+    cols[1 + metric_offset].metric("Expected I steps", _format_steps(infectious_steps))
+    cols[2 + metric_offset].metric(
         "Peak-step infection p",
         f"{profile['mean_infection_probability']:.1%}",
     )
-    cols[3].metric("1-neighbor vulnerable", f"{vulnerable_fraction:.1%}")
+    cols[3 + metric_offset].metric("1-neighbor vulnerable", f"{vulnerable_fraction:.1%}")
 
     if params["model"] == "simple":
         rough_r = (
@@ -575,6 +604,11 @@ def _show_current_math_context(graph, result, params: dict) -> None:
         )
 
     parameter_rows = [
+        {
+            "Parameter": "topology",
+            "Current value": params["topology"],
+            "Meaning": "Network structure used for exposure paths",
+        },
         {
             "Parameter": "model",
             "Current value": params["model"],
@@ -616,6 +650,15 @@ def _show_current_math_context(graph, result, params: dict) -> None:
             "Meaning": "Controls reproducible network and random draws",
         },
     ]
+    if graph.is_directed():
+        parameter_rows.insert(
+            1,
+            {
+                "Parameter": "influencer_fraction",
+                "Current value": f"{params['influencer_fraction']:.2f}",
+                "Meaning": "Fraction of nodes with outgoing influence and zero incoming ties",
+            },
+        )
     st.dataframe(parameter_rows, width="stretch", hide_index=True)
 
     with st.expander("Peak-step pressure details"):
@@ -712,9 +755,9 @@ def _contagion_profile(graph, state, params: dict) -> dict[str, float]:
     threshold_ready = 0
 
     for node in susceptible_nodes:
-        degree = graph.degree[node]
+        degree = _exposure_degree(graph, node)
         infected_neighbors = sum(
-            1 for neighbor in graph.neighbors(node)
+            1 for neighbor in _incoming_neighbors(graph, node)
             if int(state[neighbor]) == INFECTED
         )
         infected_neighbor_counts.append(infected_neighbors)
@@ -748,6 +791,8 @@ def _contagion_profile(graph, state, params: dict) -> dict[str, float]:
 def _average_degree(graph) -> float:
     if graph.number_of_nodes() == 0:
         return 0.0
+    if graph.is_directed():
+        return graph.number_of_edges() / graph.number_of_nodes()
     return 2.0 * graph.number_of_edges() / graph.number_of_nodes()
 
 
@@ -763,9 +808,31 @@ def _one_neighbor_vulnerable_fraction(graph, theta: float) -> float:
         return 0.0
     vulnerable = sum(
         1 for node in nodes
-        if graph.degree[node] > 0 and 1.0 / graph.degree[node] >= theta
+        if _exposure_degree(graph, node) > 0
+        and 1.0 / _exposure_degree(graph, node) >= theta
     )
     return vulnerable / len(nodes)
+
+
+def _incoming_neighbors(graph, node: int):
+    if graph.is_directed():
+        return graph.predecessors(node)
+    return graph.neighbors(node)
+
+
+def _exposure_degree(graph, node: int) -> int:
+    if graph.is_directed():
+        return int(graph.in_degree[node])
+    return int(graph.degree[node])
+
+
+def _influencer_count(graph) -> int:
+    if not graph.is_directed():
+        return 0
+    return sum(
+        1 for node in graph.nodes
+        if graph.nodes[node].get("role") == "influencer"
+    )
 
 
 def _format_steps(value: float) -> str:

@@ -267,6 +267,9 @@ h1 {{
   font-size: 11px;
   font-weight: 650;
 }}
+.legend.directed {{
+  grid-template-columns: repeat(2, 1fr);
+}}
 .legend span {{
   display: inline-flex;
   align-items: center;
@@ -277,6 +280,10 @@ h1 {{
   height: 9px;
   border-radius: 50%;
   display: inline-block;
+}}
+.influencer-swatch {{
+  background: transparent;
+  border: 2px solid var(--amber);
 }}
 .controls {{
   position: absolute;
@@ -389,11 +396,12 @@ input[type="range"] {{
     <div class="panel-title">Temporal Wave</div>
     <canvas id="curveCanvas"></canvas>
     <div class="state-mix" id="stateMix"></div>
-    <div class="legend">
+    <div class="legend" id="legend">
       <span><i class="swatch" style="background: var(--blue)"></i>S</span>
       <span><i class="swatch" style="background: var(--amber)"></i>E</span>
       <span><i class="swatch" style="background: var(--red)"></i>I</span>
       <span><i class="swatch" style="background: var(--gray)"></i>R</span>
+      <span id="influencerLegend"><i class="swatch influencer-swatch"></i>Influencer</span>
     </div>
   </aside>
 
@@ -442,6 +450,8 @@ const stepReadout = document.getElementById("stepReadout");
 const metrics = document.getElementById("metrics");
 const stateMix = document.getElementById("stateMix");
 const statusText = document.getElementById("statusText");
+const legend = document.getElementById("legend");
+const influencerLegend = document.getElementById("influencerLegend");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
 const resetViewButton = document.getElementById("resetViewButton");
@@ -489,6 +499,12 @@ let curveH = 0;
 let view = {{ scale: 1, x: 0, y: 0 }};
 let dragging = false;
 let lastPointer = {{ x: 0, y: 0 }};
+
+if (data.directed) {{
+  legend.classList.add("directed");
+}} else {{
+  influencerLegend.style.display = "none";
+}}
 
 function resizeCanvas(canvas, ctx) {{
   const rect = canvas.getBoundingClientRect();
@@ -581,6 +597,29 @@ function drawBackground() {{
   networkCtx.restore();
 }}
 
+function drawArrowHead(x1, y1, x2, y2, color, targetRadius) {{
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const tipX = x2 - Math.cos(angle) * (targetRadius + 2);
+  const tipY = y2 - Math.sin(angle) * (targetRadius + 2);
+  const size = 5.8;
+
+  networkCtx.save();
+  networkCtx.fillStyle = color;
+  networkCtx.beginPath();
+  networkCtx.moveTo(tipX, tipY);
+  networkCtx.lineTo(
+    tipX - Math.cos(angle - Math.PI / 7) * size,
+    tipY - Math.sin(angle - Math.PI / 7) * size
+  );
+  networkCtx.lineTo(
+    tipX - Math.cos(angle + Math.PI / 7) * size,
+    tipY - Math.sin(angle + Math.PI / 7) * size
+  );
+  networkCtx.closePath();
+  networkCtx.fill();
+  networkCtx.restore();
+}}
+
 function drawNetwork() {{
   const states = data.states[step];
   drawBackground();
@@ -593,12 +632,17 @@ function drawNetwork() {{
     const [x1, y1] = nodePoint(source);
     const [x2, y2] = nodePoint(target);
     const isActive = states[a] === 1 || states[b] === 1 || states[a] === 3 || states[b] === 3;
-    networkCtx.strokeStyle = isActive ? palette.edgeActive : palette.edgeIdle;
+    const edgeColor = isActive ? palette.edgeActive : palette.edgeIdle;
+    networkCtx.strokeStyle = edgeColor;
     networkCtx.lineWidth = isActive ? 1.05 : 0.7;
     networkCtx.beginPath();
     networkCtx.moveTo(x1, y1);
     networkCtx.lineTo(x2, y2);
     networkCtx.stroke();
+    if (data.directed) {{
+      const targetRadius = 3.0 + target.degreeScale * 7.0;
+      drawArrowHead(x1, y1, x2, y2, edgeColor, targetRadius);
+    }}
   }}
   networkCtx.restore();
 
@@ -606,9 +650,16 @@ function drawNetwork() {{
     const state = states[node.id];
     const [x, y] = nodePoint(node);
     const base = 3.0 + node.degreeScale * 7.0;
+    if (node.influencer) {{
+      networkCtx.strokeStyle = "#ffcc00";
+      networkCtx.lineWidth = 2.4;
+      networkCtx.beginPath();
+      networkCtx.arc(x, y, base + 3.0, 0, Math.PI * 2);
+      networkCtx.stroke();
+    }}
     networkCtx.fillStyle = colors[state];
-    networkCtx.strokeStyle = palette.nodeStroke;
-    networkCtx.lineWidth = state === 1 ? 1.6 : 0.9;
+    networkCtx.strokeStyle = node.influencer ? "#ffcc00" : palette.nodeStroke;
+    networkCtx.lineWidth = node.influencer ? 1.7 : state === 1 ? 1.6 : 0.9;
     networkCtx.beginPath();
     networkCtx.arc(x, y, base, 0, Math.PI * 2);
     networkCtx.fill();
@@ -794,15 +845,16 @@ def _stage_payload(
     y_min, y_max = float(ys.min()), float(ys.max())
     x_span = max(1e-9, x_max - x_min)
     y_span = max(1e-9, y_max - y_min)
-    max_degree = max((graph.degree[node] for node in graph.nodes), default=1)
+    max_degree = max((_visual_degree(graph, node) for node in graph.nodes), default=1)
 
     nodes = [
         {
             "id": int(node),
             "x": float((pos[node][0] - x_min) / x_span),
             "y": float((pos[node][1] - y_min) / y_span),
-            "degree": int(graph.degree[node]),
-            "degreeScale": float(graph.degree[node] / max_degree),
+            "degree": int(_visual_degree(graph, node)),
+            "degreeScale": float(_visual_degree(graph, node) / max_degree),
+            "influencer": _is_influencer_node(graph, node),
         }
         for node in graph.nodes
     ]
@@ -833,12 +885,38 @@ def _stage_payload(
         "metrics": result.metrics,
         "node_count": graph.number_of_nodes(),
         "edge_count": graph.number_of_edges(),
+        "directed": graph.is_directed(),
         "theme": visual_theme,
         "max_step": len(result.states) - 1,
         "peak_step": int(result.metrics["peak_index"]),
-        "kicker": f"{topology} network / {result.variant}",
-        "subtitle": (
-            "A real-time view of adoption pressure, exposure and recovery across a "
-            f"{graph.number_of_nodes()} node network."
-        ),
+        "kicker": _stage_kicker(graph, topology, result.variant),
+        "subtitle": _stage_subtitle(graph),
     }
+
+
+def _visual_degree(graph: nx.Graph, node: int) -> int:
+    if graph.is_directed():
+        return int(graph.out_degree[node])
+    return int(graph.degree[node])
+
+
+def _is_influencer_node(graph: nx.Graph, node: int) -> bool:
+    return graph.nodes[node].get("role") == "influencer"
+
+
+def _stage_kicker(graph: nx.Graph, topology: str, variant: str) -> str:
+    if graph.is_directed():
+        return f"Directed influence / {variant}"
+    return f"{topology} network / {variant}"
+
+
+def _stage_subtitle(graph: nx.Graph) -> str:
+    if graph.is_directed():
+        return (
+            "Arrows show who can transmit influence; influencer nodes broadcast "
+            "without incoming social ties."
+        )
+    return (
+        "A real-time view of adoption pressure, exposure and recovery across a "
+        f"{graph.number_of_nodes()} node network."
+    )

@@ -32,7 +32,8 @@ STATE_COLUMNS = (
 def compute_layout(graph: nx.Graph, random_seed: int) -> dict[int, tuple[float, float]]:
     """Use a stable force-directed layout without requiring SciPy."""
     nodes = list(graph.nodes)
-    adjacency = nx.to_numpy_array(graph, nodelist=nodes, dtype=float)
+    layout_graph = graph.to_undirected() if graph.is_directed() else graph
+    adjacency = nx.to_numpy_array(layout_graph, nodelist=nodes, dtype=float)
     positions = _fruchterman_reingold(adjacency, seed=random_seed)
     return {
         node: (float(positions[index, 0]), float(positions[index, 1]))
@@ -183,9 +184,17 @@ def _draw_network(
 ) -> None:
     node_colors = [STATE_COLORS[int(state[node])] for node in graph.nodes]
     node_size = max(35, min(120, 3800 / max(1, graph.number_of_nodes())))
-    max_degree = max((graph.degree[node] for node in graph.nodes), default=1)
+    max_degree = max((_visual_degree(graph, node) for node in graph.nodes), default=1)
     node_sizes = [
-        node_size * (0.72 + 0.75 * graph.degree[node] / max(1, max_degree))
+        node_size * (0.72 + 0.75 * _visual_degree(graph, node) / max(1, max_degree))
+        for node in graph.nodes
+    ]
+    node_edgecolors = [
+        "#ffcc00" if _is_influencer_node(graph, node) else "white"
+        for node in graph.nodes
+    ]
+    node_linewidths = [
+        1.4 if _is_influencer_node(graph, node) else 0.25
         for node in graph.nodes
     ]
     exposed_nodes = [node for node in graph.nodes if int(state[node]) == EXPOSED]
@@ -195,17 +204,25 @@ def _draw_network(
         ax.set_facecolor("#080b12")
         ax.figure.patch.set_facecolor("#080b12")
 
-    nx.draw_networkx_edges(
-        graph,
-        pos,
-        ax=ax,
-        alpha=0.32 if dark else 0.18,
-        width=0.9,
-        edge_color="#5f6b7a" if dark else "#666666",
-    )
+    edge_kwargs = {
+        "alpha": 0.32 if dark else 0.18,
+        "width": 0.9,
+        "edge_color": "#5f6b7a" if dark else "#666666",
+    }
+    if graph.is_directed():
+        edge_kwargs.update(
+            {
+                "arrows": True,
+                "arrowsize": 7,
+                "arrowstyle": "-|>",
+                "connectionstyle": "arc3,rad=0.035",
+            }
+        )
+
+    nx.draw_networkx_edges(graph, pos, ax=ax, **edge_kwargs)
     if exposed_nodes:
         exposed_sizes = [
-            node_size * (2.8 + 1.2 * graph.degree[node] / max(1, max_degree))
+            node_size * (2.8 + 1.2 * _visual_degree(graph, node) / max(1, max_degree))
             for node in exposed_nodes
         ]
         nx.draw_networkx_nodes(
@@ -220,7 +237,7 @@ def _draw_network(
         )
     if infected_nodes:
         infected_sizes = [
-            node_size * (4.0 + 1.6 * graph.degree[node] / max(1, max_degree))
+            node_size * (4.0 + 1.6 * _visual_degree(graph, node) / max(1, max_degree))
             for node in infected_nodes
         ]
         nx.draw_networkx_nodes(
@@ -239,13 +256,13 @@ def _draw_network(
         ax=ax,
         node_color=node_colors,
         node_size=node_sizes,
-        linewidths=0.25,
-        edgecolors="white",
+        linewidths=node_linewidths,
+        edgecolors=node_edgecolors,
     )
 
     ax.set_title(title, color="#f8fafc" if dark else "#111111", fontweight="bold")
     ax.set_axis_off()
-    legend = ax.legend(handles=_legend_handles(), loc="lower left", frameon=False, fontsize=8)
+    legend = ax.legend(handles=_legend_handles(graph), loc="lower left", frameon=False, fontsize=8)
     if dark:
         for text in legend.get_texts():
             text.set_color("#e5e7eb")
@@ -334,10 +351,35 @@ def _draw_state_mix(ax, row: pd.Series, total_nodes: int) -> None:
     ax.text(1.0, 0.12, f"ever infected {int(row['ever_infected'])}", color="#9ca3af", fontsize=8, ha="right")
 
 
-def _legend_handles() -> list[Line2D]:
-    return [
+def _legend_handles(graph: nx.Graph) -> list[Line2D]:
+    handles = [
         Line2D([0], [0], marker="o", color="w", label="S", markerfacecolor=STATE_COLORS[SUSCEPTIBLE], markersize=7),
         Line2D([0], [0], marker="o", color="w", label="E", markerfacecolor=STATE_COLORS[EXPOSED], markersize=7),
         Line2D([0], [0], marker="o", color="w", label="I", markerfacecolor=STATE_COLORS[INFECTED], markersize=7),
         Line2D([0], [0], marker="o", color="w", label="R", markerfacecolor=STATE_COLORS[RECOVERED], markersize=7),
     ]
+    if graph.is_directed():
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                label="Influencer",
+                markerfacecolor="none",
+                markeredgecolor="#ffcc00",
+                markeredgewidth=1.8,
+                markersize=8,
+            )
+        )
+    return handles
+
+
+def _visual_degree(graph: nx.Graph, node: int) -> int:
+    if graph.is_directed():
+        return int(graph.out_degree[node])
+    return int(graph.degree[node])
+
+
+def _is_influencer_node(graph: nx.Graph, node: int) -> bool:
+    return graph.nodes[node].get("role") == "influencer"

@@ -136,15 +136,18 @@ def choose_initial_infected(
     mode: SeedMode,
     rng: np.random.Generator,
 ) -> list[int]:
-    """Select initial infected nodes either randomly or by highest degree."""
+    """Select initial infected nodes either randomly or by strongest influence."""
     n_nodes = graph.number_of_nodes()
     n_initial = max(1, min(int(n_initial), n_nodes))
 
     if mode == "random":
         return sorted(rng.choice(n_nodes, size=n_initial, replace=False).tolist())
     if mode == "hubs":
-        ranked_nodes = sorted(graph.degree, key=lambda item: (-item[1], item[0]))
-        return sorted(node for node, _degree in ranked_nodes[:n_initial])
+        ranked_nodes = sorted(
+            graph.nodes,
+            key=lambda node: (-_influence_degree(graph, node), node),
+        )
+        return sorted(ranked_nodes[:n_initial])
     raise ValueError(f"Unknown seed mode: {mode}")
 
 
@@ -249,7 +252,7 @@ def _infection_trigger(
     rng: np.random.Generator,
 ) -> tuple[bool, list[int], str]:
     infected_neighbors = [
-        neighbor for neighbor in graph.neighbors(node)
+        neighbor for neighbor in _incoming_neighbors(graph, node)
         if state[neighbor] == INFECTED
     ]
 
@@ -261,7 +264,7 @@ def _infection_trigger(
         else:
             contagion = False
     elif model == "threshold":
-        degree = graph.degree[node]
+        degree = _exposure_degree(graph, node)
         if degree > 0 and len(infected_neighbors) / degree >= theta:
             return True, _threshold_causes(graph, infected_neighbors), "threshold"
     else:
@@ -282,12 +285,36 @@ def _new_contagion_state(model: ModelName, simple_variant: SimpleVariant) -> int
 
 def _primary_cause(graph: nx.Graph, infected_neighbors: list[int]) -> int:
     """Choose a stable representative infected neighbor for simple contagion."""
-    return sorted(infected_neighbors, key=lambda node: (-graph.degree[node], node))[0]
+    return sorted(
+        infected_neighbors,
+        key=lambda node: (-_influence_degree(graph, node), node),
+    )[0]
 
 
 def _threshold_causes(graph: nx.Graph, infected_neighbors: list[int]) -> list[int]:
     """Return the most connected infected neighbors for threshold contagion highlighting."""
-    return sorted(infected_neighbors, key=lambda node: (-graph.degree[node], node))[:5]
+    return sorted(
+        infected_neighbors,
+        key=lambda node: (-_influence_degree(graph, node), node),
+    )[:5]
+
+
+def _incoming_neighbors(graph: nx.Graph, node: int):
+    if graph.is_directed():
+        return graph.predecessors(node)
+    return graph.neighbors(node)
+
+
+def _exposure_degree(graph: nx.Graph, node: int) -> int:
+    if graph.is_directed():
+        return int(graph.in_degree[node])
+    return int(graph.degree[node])
+
+
+def _influence_degree(graph: nx.Graph, node: int) -> int:
+    if graph.is_directed():
+        return int(graph.out_degree[node])
+    return int(graph.degree[node])
 
 
 def _empty_step_events() -> dict[str, list[dict]]:

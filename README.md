@@ -1,7 +1,8 @@
 # Social Contagion Simulator
 
 Local Streamlit app for a Complex Systems presentation on social contagion in
-networks. It compares simple SIR/SIS/SEIR contagion with complex threshold contagion.
+networks. It compares simple SIR/SIS/SEIR contagion with complex threshold
+contagion across undirected networks and directed influencer networks.
 
 ## Features
 
@@ -10,6 +11,8 @@ networks. It compares simple SIR/SIS/SEIR contagion with complex threshold conta
   - Watts-Strogatz
   - Barabasi-Albert
   - Scale-Free
+  - Directed Influencers
+- Directed influencer networks where arrows represent one-way influence.
 - Initial infected nodes selected at random or from hubs.
 - Simple contagion with SIR, SIS, or SEIR dynamics.
 - Complex threshold contagion.
@@ -106,14 +109,15 @@ If you do not activate the virtual environment, run Streamlit directly from it:
 | --- | --- | --- | --- |
 | `Number of nodes` | `20` to `500` | `150` | Number of agents in the graph. |
 | `Average degree` | `1` to `30` | `6` | Target average number of neighbors per node. |
-| `Topology` | `Erdos-Renyi`, `Watts-Strogatz`, `Barabasi-Albert`, `Scale-Free` | `Erdos-Renyi` | Network generation model. |
+| `Topology` | `Erdos-Renyi`, `Watts-Strogatz`, `Barabasi-Albert`, `Scale-Free`, `Directed Influencers` | `Erdos-Renyi` | Network generation model. |
+| `Influencer fraction` | `0.01` to `0.25` | `0.06` | Only shown for `Directed Influencers`; fraction of nodes with outgoing influence and zero incoming social ties. |
 
 ### Initial Condition
 
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `Initial infected` | `1` to `min(80, n_nodes)` | `5` | Number of infected seed nodes at `t=0`. |
-| `Seed mode` | `random`, `hubs` | `random` | Choose seeds randomly or from highest-degree nodes. |
+| `Seed mode` | `random`, `hubs` | `random` | Choose seeds randomly or from strongest influence hubs; directed graphs rank by out-degree. |
 | `Maximum steps` | `5` to `200` | `60` | Number of synchronous simulation updates. |
 | `Random seed` | integer `>= 0` | `42` | Reproduces the network and stochastic draws. |
 
@@ -163,6 +167,13 @@ m_i(t) = number of infected neighbors
 k_i    = total number of neighbors
 epsilon = external_noise
 ```
+
+In undirected graphs, neighbors are ordinary two-way ties. In `Directed
+Influencers`, an edge `u -> v` means `u` can influence `v`; therefore `m_i(t)`
+counts infected predecessors and `k_i` is the in-degree of node `i`.
+Influencer nodes have no incoming social ties, so they are not infected by
+network contagion. They can still be initial seeds or adopt through
+`external_noise`.
 
 Simple contagion uses the per-step neighbor probability:
 
