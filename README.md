@@ -2,9 +2,9 @@
 
 Local Streamlit app for a Complex Systems presentation on social contagion in
 networks. It compares simple SIR/SIS/SEIR contagion with complex threshold
-contagion across undirected networks, with an optional directed influencer layer
-on Barabasi-Albert networks, and a real Twitter retweet sample from the SNAP
-Higgs rumor dataset.
+adoption inside SEIR across undirected networks, with an optional directed
+influencer layer on Barabasi-Albert networks, and a real Twitter retweet sample
+from the SNAP Higgs rumor dataset.
 
 ## Features
 
@@ -18,13 +18,15 @@ Higgs rumor dataset.
 - Initial infected nodes selected at random for synthetic runs or from earliest
   observed activity for Twitter runs.
 - Simple contagion with SIR, SIS, or SEIR dynamics.
-- Complex threshold contagion.
+- Optional complex reinforcement memory for SEIR contagion.
+- Threshold adoption as a SEIR exposure rule.
 - External noise for media, algorithms, or outside influence.
 - Simultaneous updates using a separate `next_state`.
 - Apple-like Streamlit page with a custom HTML/CSS/JavaScript canvas stage.
 - Appearance selector with Auto, Light, and Dark modes.
 - Light and dark stage palettes, so the main simulation matches the page theme.
 - Stage size controls for wide, compact, or tall presentation formats.
+- Fixed experiment presets with scenario interpretation.
 - Step-based playback with stable node colors and a synchronized curve marker.
 - Pan and zoom inside the main network canvas with drag, scroll, buttons, and double-click reset.
 - Analysis tabs for snapshots, time series, parameter sweeps, topology notes,
@@ -35,7 +37,7 @@ Higgs rumor dataset.
 - Initial, peak, and final network snapshots.
 - S(t), E(t), I(t), R(t) curves.
 - Final cascade size, peak infected fraction, and time to peak.
-- Automatic beta and theta sweeps.
+- Automatic parameter sweeps for the selected model.
 - PNG export from the app.
 
 ## Download the Repository
@@ -123,6 +125,21 @@ Source: https://snap.stanford.edu/data/higgs-twitter.html
 
 ## Parameters
 
+### Experiment Presets
+
+The sidebar includes presets for presentation-ready experiments. Selecting one
+loads the model and network parameters and adds an interpretation in the
+`Experiments` tab. If you edit any loaded preset parameter, the app switches
+back to `Custom` while keeping your edited configuration.
+
+| Preset | Model | Interpretation |
+| --- | --- | --- |
+| `Breaking news broadcast (SIR)` | SIR | A public event spreads through retweets plus strong outside media/trending-topic pressure. |
+| `Recurring trend churn (SIS)` | SIS | Users can leave and re-enter attention cycles, as in recurring memes or consumer trends. |
+| `Latent attention (SEIR)` | SEIR probabilistic | Users can see a topic before visibly participating, delaying the observed wave. |
+| `Political radicalization memory (SEIR)` | SEIR with memory | Repeated exposure accumulates before visible adoption, using a stylized influencer-heavy network. |
+| `Social proof threshold (SEIR)` | SEIR threshold | Users enter exposure only after enough simultaneous social signals. |
+
 ### Appearance
 
 | Parameter | Values | Default | Meaning |
@@ -158,19 +175,22 @@ Source: https://snap.stanford.edu/data/higgs-twitter.html
 
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `Contagion model` | `simple`, `threshold` | `simple` | Selects probabilistic simple contagion or complex threshold contagion. |
-| `Simple model type` | `SIR`, `SIS`, `SEIR` | `SIR` | State-transition variant; only shown when `model=simple`. |
-| `beta` | `0.00` to `1.00` | `0.30` | Per-neighbor transmission probability; only shown for simple contagion. |
+| `Contagion model` | `SIR`, `SIS`, `SEIR` | `SIR` | State-transition model. |
+| `SEIR adoption rule` | `probabilistic`, `threshold` | `probabilistic` | How susceptible nodes enter `E`; only shown for `SEIR`. |
+| `beta` | `0.00` to `1.00` | `0.30` | Per-neighbor transmission probability; shown for `SIR`, `SIS`, and probabilistic `SEIR`. |
 | `sigma` | `0.00` to `1.00` | `0.35` | Probability that an exposed SEIR node becomes infected per step; only shown for `SEIR`. |
-| `theta` | `0.00` to `1.00` | `0.25` | Infected-neighbor fraction needed for threshold adoption; only shown for threshold contagion. |
+| `Complex reinforcement` | checkbox | off | Probabilistic SEIR memory: susceptible nodes accumulate repeated exposures across steps. |
+| `Memory retention` | `0.00` to `1.00` | `0.75` | Fraction of remembered exposure pressure kept each step; only shown when `Complex reinforcement` is enabled. |
+| `theta` | `0.00` to `1.00` | `0.25` | Infected-neighbor fraction needed for threshold adoption; only shown for threshold `SEIR`. |
 | `gamma` | `0.00` to `1.00` | `0.10` | Probability that an infected node recovers per step. |
 | `external_noise` | `0.000` to `0.100` | `0.000` | Outside adoption probability per susceptible node per step. |
 
-The app also runs two automatic sweeps for comparison:
+The app runs automatic sweeps only for parameters used by the selected model:
 
 ```text
-beta sweep:  0.1, 0.2, 0.3, 0.4, 0.5
-theta sweep: 0.1, 0.25, 0.4
+SIR/SIS:   beta, gamma
+SEIR probabilistic: beta, sigma, gamma
+SEIR threshold:     theta, sigma, gamma
 ```
 
 ## Project Structure
@@ -308,24 +328,38 @@ Modes:
 
 - SIR: infected nodes recover to `R`.
 - SIS: infected nodes recover to `S`.
-- SEIR: new contagions enter `E`, exposed nodes become infected with probability
+- SEIR: new adoptions enter `E`, exposed nodes become infected with probability
   `sigma`, and infected nodes recover to `R`.
 
-Threshold contagion infects a susceptible node when:
+With `Complex reinforcement` enabled in SEIR, susceptible nodes remember prior
+exposure pressure:
+
+```text
+rho = memory_retention
+r_i(t) = min(k_i, rho * r_i(t-1) + m_i(t))
+q_i(t) = 1 - (1 - beta)^r_i(t)
+```
+
+This models repeated exposure: a user who has seen the topic several times can
+become exposed later even if adoption did not happen on the first contact. Low
+retention forgets pressure quickly; high retention keeps past exposure pressure
+alive for longer.
+
+With threshold adoption in SEIR, a susceptible node enters `E` when:
 
 ```text
 m_i(t) / k_i >= theta
 ```
 
-If the threshold condition is not met, external noise can still trigger adoption
-with probability `epsilon`.
+If the threshold condition is not met, external noise can still trigger exposure
+with probability `epsilon`. The path is still `S -> E -> I -> R`.
 
-Both models include recovery with probability `gamma` per infected node per
+All models include recovery with probability `gamma` per infected node per
 step.
 
 `Final cascade size` is measured as the cumulative fraction of nodes that were
 infected or exposed at least once, which keeps the metric meaningful for SIR,
-SIS, SEIR, and threshold cascades.
+SIS, probabilistic SEIR, and threshold-SEIR cascades.
 
 The in-app `Topologies` tab shows topology equations and graph metrics. The
 `Mathematics` tab shows contagion equations, current parameter values, a rough

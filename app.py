@@ -20,7 +20,9 @@ from src.simulation import (
     INFECTED,
     SUSCEPTIBLE,
     run_beta_sweep,
+    run_gamma_sweep,
     run_simulation,
+    run_sigma_sweep,
     run_theta_sweep,
 )
 from src.twitter_higgs import (
@@ -34,9 +36,166 @@ from src.web_stage import build_stage_html
 
 
 BETA_SWEEP = [0.1, 0.2, 0.3, 0.4, 0.5]
+SIGMA_SWEEP = [0.1, 0.25, 0.4, 0.6, 0.8]
 THETA_SWEEP = [0.1, 0.25, 0.4]
-APP_STATE_VERSION = 9
+GAMMA_SWEEP = [0.03, 0.06, 0.10, 0.16, 0.25]
+APP_STATE_VERSION = 15
 APP_TOPOLOGIES = (*TOPOLOGIES, HIGGS_TWITTER_TOPOLOGY)
+CUSTOM_EXPERIMENT = "Custom"
+EXPERIMENT_PRESETS = {
+    CUSTOM_EXPERIMENT: {
+        "title": "Custom",
+        "model_family": "Manual",
+        "question": "Free exploration with editable network and model parameters.",
+        "interpretation": "Use this mode when you want to tune parameters directly.",
+        "expected": "No fixed interpretation; the result depends on the controls you choose.",
+        "params": {},
+    },
+    "Breaking news broadcast (SIR)": {
+        "title": "Breaking news broadcast",
+        "model_family": "SIR",
+        "question": "What happens when a public event gets a strong outside push?",
+        "interpretation": (
+            "A Higgs-like news event spreads through retweets, but media coverage "
+            "and trending topics also expose users outside the observed network."
+        ),
+        "expected": (
+            "A fast wave with a visible peak. External noise keeps the cascade "
+            "moving even when local retweet paths are sparse."
+        ),
+        "params": {
+            "topology": HIGGS_TWITTER_TOPOLOGY,
+            "n_nodes": 300,
+            "min_edge_weight": 1,
+            "reverse_retweets": True,
+            "initial_infected": 5,
+            "max_steps": 60,
+            "random_seed": 42,
+            "simple_variant": "SIR",
+            "beta": 0.12,
+            "gamma": 0.06,
+            "external_noise": 0.006,
+        },
+    },
+    "Recurring trend churn (SIS)": {
+        "title": "Recurring trend churn",
+        "model_family": "SIS",
+        "question": "Can attention cycle back instead of ending permanently?",
+        "interpretation": (
+            "Users can stop participating and later become susceptible again, "
+            "which is closer to recurring memes, consumer trends, or daily topics."
+        ),
+        "expected": (
+            "The active infected fraction can persist or oscillate because "
+            "recovered users return to the susceptible pool."
+        ),
+        "params": {
+            "topology": "Barabasi-Albert",
+            "n_nodes": 250,
+            "average_degree": 8,
+            "influencer_layer": True,
+            "influencer_fraction": 0.08,
+            "influencers_receive_from_peers": True,
+            "initial_infected": 8,
+            "max_steps": 80,
+            "random_seed": 42,
+            "simple_variant": "SIS",
+            "beta": 0.18,
+            "gamma": 0.08,
+            "external_noise": 0.002,
+        },
+    },
+    "Latent attention (SEIR)": {
+        "title": "Latent attention",
+        "model_family": "SEIR probabilistic",
+        "question": "What if users see the topic before they visibly participate?",
+        "interpretation": (
+            "Retweet exposure first creates a latent exposed state. Users then "
+            "activate later with sigma, so the visible wave is delayed."
+        ),
+        "expected": (
+            "Compared with SIR, the peak should arrive later and the exposed "
+            "curve should appear before the infected curve grows."
+        ),
+        "params": {
+            "topology": HIGGS_TWITTER_TOPOLOGY,
+            "n_nodes": 300,
+            "min_edge_weight": 1,
+            "reverse_retweets": True,
+            "initial_infected": 5,
+            "max_steps": 70,
+            "random_seed": 42,
+            "simple_variant": "SEIR",
+            "seir_adoption_rule": "probabilistic",
+            "beta": 0.18,
+            "sigma": 0.25,
+            "gamma": 0.06,
+            "external_noise": 0.002,
+            "complex_reinforcement": False,
+        },
+    },
+    "Political radicalization memory (SEIR)": {
+        "title": "Political radicalization memory",
+        "model_family": "SEIR probabilistic + memory",
+        "question": "What if repeated exposure accumulates before visible adoption?",
+        "interpretation": (
+            "This is a stylized radicalization scenario: a person may not adopt "
+            "after one contact, but repeated exposure from influential accounts "
+            "builds latent pressure over time."
+        ),
+        "expected": (
+            "Memory should make cascades less dependent on one-step exposure. "
+            "The process can start slowly and then accelerate after pressure accumulates."
+        ),
+        "params": {
+            "topology": "Barabasi-Albert",
+            "n_nodes": 300,
+            "average_degree": 8,
+            "influencer_layer": True,
+            "influencer_fraction": 0.08,
+            "influencers_receive_from_peers": False,
+            "initial_infected": 6,
+            "max_steps": 90,
+            "random_seed": 42,
+            "simple_variant": "SEIR",
+            "seir_adoption_rule": "probabilistic",
+            "beta": 0.08,
+            "sigma": 0.22,
+            "gamma": 0.05,
+            "external_noise": 0.001,
+            "complex_reinforcement": True,
+            "reinforcement_memory": 0.85,
+        },
+    },
+    "Social proof threshold (SEIR)": {
+        "title": "Social proof threshold",
+        "model_family": "SEIR threshold",
+        "question": "What if adoption needs several simultaneous social signals?",
+        "interpretation": (
+            "A user only enters the exposed state after enough infected "
+            "predecessors are active at the same time. This models social proof."
+        ),
+        "expected": (
+            "The cascade should be more selective. Lower theta allows broad "
+            "spread; higher theta makes adoption concentrated around dense pockets."
+        ),
+        "params": {
+            "topology": HIGGS_TWITTER_TOPOLOGY,
+            "n_nodes": 300,
+            "min_edge_weight": 1,
+            "reverse_retweets": True,
+            "initial_infected": 8,
+            "max_steps": 70,
+            "random_seed": 42,
+            "simple_variant": "SEIR",
+            "seir_adoption_rule": "threshold",
+            "theta": 0.12,
+            "sigma": 0.30,
+            "gamma": 0.06,
+            "external_noise": 0.002,
+        },
+    },
+}
 
 
 def main() -> None:
@@ -50,11 +209,13 @@ def main() -> None:
     _show_header()
 
     run_clicked = st.sidebar.button("Run Simulation", type="primary", width="stretch")
+    params_signature = _simulation_signature(params)
 
     if (
         run_clicked
         or "simulation_payload" not in st.session_state
         or st.session_state.get("app_state_version") != APP_STATE_VERSION
+        or st.session_state.get("params_signature") != params_signature
     ):
         try:
             st.session_state["simulation_payload"] = _run_model(params)
@@ -62,6 +223,7 @@ def main() -> None:
             st.error(str(error))
             st.stop()
         st.session_state["app_state_version"] = APP_STATE_VERSION
+        st.session_state["params_signature"] = params_signature
 
     payload = st.session_state["simulation_payload"]
     result = payload["result"]
@@ -80,7 +242,104 @@ def main() -> None:
     _show_analysis_tabs(graph, result, pos, payload)
 
 
+def _simulation_signature(params: dict) -> tuple:
+    ignored = {"visual_theme", "stage_preset", "stage_height", "stage_width"}
+    return tuple(
+        sorted(
+            (key, value)
+            for key, value in params.items()
+            if key not in ignored
+        )
+    )
+
+
+CONTROL_DEFAULTS = {
+    "topology": "Erdos-Renyi",
+    "n_nodes": 150,
+    "average_degree": 6,
+    "influencer_layer": False,
+    "influencer_fraction": 0.06,
+    "influencers_receive_from_peers": False,
+    "min_edge_weight": 1,
+    "reverse_retweets": True,
+    "initial_infected": 5,
+    "max_steps": 60,
+    "random_seed": 42,
+    "simple_variant": "SIR",
+    "seir_adoption_rule": "probabilistic",
+    "beta": 0.30,
+    "sigma": 0.35,
+    "theta": 0.25,
+    "complex_reinforcement": False,
+    "reinforcement_memory": 0.75,
+    "gamma": 0.10,
+    "external_noise": 0.00,
+}
+CONTROL_KEYS = tuple(CONTROL_DEFAULTS)
+
+
+def _control_key(name: str) -> str:
+    return f"control_{name}"
+
+
+def _ensure_sidebar_state() -> None:
+    st.session_state.setdefault("experiment_preset", CUSTOM_EXPERIMENT)
+    st.session_state.setdefault("active_experiment_preset", CUSTOM_EXPERIMENT)
+    st.session_state.setdefault("custom_control_values", CONTROL_DEFAULTS.copy())
+    for key, value in CONTROL_DEFAULTS.items():
+        st.session_state.setdefault(_control_key(key), value)
+
+
+def _current_control_values() -> dict:
+    return {
+        key: st.session_state.get(_control_key(key), default)
+        for key, default in CONTROL_DEFAULTS.items()
+    }
+
+
+def _save_custom_controls() -> None:
+    st.session_state["custom_control_values"] = _current_control_values()
+
+
+def _apply_control_values(values: dict) -> None:
+    merged = CONTROL_DEFAULTS | values
+    for key, value in merged.items():
+        if key in CONTROL_DEFAULTS:
+            st.session_state[_control_key(key)] = value
+
+
+def _on_experiment_change() -> None:
+    previous = st.session_state.get("active_experiment_preset", CUSTOM_EXPERIMENT)
+    selected = st.session_state.get("experiment_preset", CUSTOM_EXPERIMENT)
+    if previous == CUSTOM_EXPERIMENT:
+        _save_custom_controls()
+    if selected == CUSTOM_EXPERIMENT:
+        _apply_control_values(st.session_state.get("custom_control_values", CONTROL_DEFAULTS))
+    else:
+        _apply_control_values(EXPERIMENT_PRESETS[selected]["params"])
+    st.session_state["active_experiment_preset"] = selected
+
+
+def _mark_custom_from_control() -> None:
+    if st.session_state.get("experiment_preset") != CUSTOM_EXPERIMENT:
+        st.session_state["experiment_preset"] = CUSTOM_EXPERIMENT
+        st.session_state["active_experiment_preset"] = CUSTOM_EXPERIMENT
+
+
 def _sidebar_controls() -> dict:
+    _ensure_sidebar_state()
+    st.sidebar.header("Experiment")
+    experiment_name = st.sidebar.selectbox(
+        "Preset",
+        list(EXPERIMENT_PRESETS),
+        key="experiment_preset",
+        on_change=_on_experiment_change,
+    )
+    experiment = EXPERIMENT_PRESETS[experiment_name]
+    if experiment_name != CUSTOM_EXPERIMENT:
+        st.sidebar.caption(experiment["question"])
+    preset = _current_control_values()
+
     st.sidebar.header("Appearance")
     visual_theme = st.sidebar.selectbox("Visual theme", ["Auto", "Light", "Dark"])
     stage_preset = st.sidebar.selectbox("Stage format", ["Wide", "Compact", "Tall"])
@@ -89,20 +348,45 @@ def _sidebar_controls() -> dict:
     stage_width = st.sidebar.slider("Stage width", 70, 100, 100, 5)
 
     st.sidebar.header("Network")
-    topology = st.sidebar.selectbox("Topology", APP_TOPOLOGIES)
+    topology_default = preset.get("topology", "Erdos-Renyi")
+    topology = st.sidebar.selectbox(
+        "Topology",
+        APP_TOPOLOGIES,
+        index=APP_TOPOLOGIES.index(topology_default),
+        key=_control_key("topology"),
+        on_change=_mark_custom_from_control,
+    )
     influencer_layer = False
-    average_degree = 6
+    average_degree = int(preset.get("average_degree", 6))
     influencer_fraction = 0.06
     influencers_receive_from_peers = False
     min_edge_weight = 1
     reverse_retweets = True
 
     if topology == HIGGS_TWITTER_TOPOLOGY:
-        n_nodes = st.sidebar.slider("Sample users", 50, 500, 250, 25)
-        min_edge_weight = st.sidebar.slider("Minimum retweet weight", 1, 10, 1, 1)
+        n_nodes = st.sidebar.slider(
+            "Sample users",
+            50,
+            500,
+            int(preset.get("n_nodes", 250)),
+            25,
+            key=_control_key("n_nodes"),
+            on_change=_mark_custom_from_control,
+        )
+        min_edge_weight = st.sidebar.slider(
+            "Minimum retweet weight",
+            1,
+            10,
+            int(preset.get("min_edge_weight", 1)),
+            1,
+            key=_control_key("min_edge_weight"),
+            on_change=_mark_custom_from_control,
+        )
         reverse_retweets = st.sidebar.checkbox(
             "Reverse retweets into influence flow",
-            value=True,
+            value=bool(preset.get("reverse_retweets", True)),
+            key=_control_key("reverse_retweets"),
+            on_change=_mark_custom_from_control,
         )
         missing_files = missing_higgs_data_files()
         if missing_files:
@@ -116,21 +400,46 @@ def _sidebar_controls() -> dict:
                 "Using SNAP Higgs Twitter retweets and activity from July 1-7, 2012."
             )
     else:
-        n_nodes = st.sidebar.slider("Number of nodes", 20, 500, 150, 10)
-        average_degree = st.sidebar.slider("Average degree", 1, 30, 6, 1)
+        n_nodes = st.sidebar.slider(
+            "Number of nodes",
+            20,
+            500,
+            int(preset.get("n_nodes", 150)),
+            10,
+            key=_control_key("n_nodes"),
+            on_change=_mark_custom_from_control,
+        )
+        average_degree = st.sidebar.slider(
+            "Average degree",
+            1,
+            30,
+            int(preset.get("average_degree", 6)),
+            1,
+            key=_control_key("average_degree"),
+            on_change=_mark_custom_from_control,
+        )
         if topology == BARABASI_ALBERT:
-            influencer_layer = st.sidebar.checkbox("Enable influencer layer", value=False)
+            influencer_layer = st.sidebar.checkbox(
+                "Enable influencer layer",
+                value=bool(preset.get("influencer_layer", False)),
+                key=_control_key("influencer_layer"),
+                on_change=_mark_custom_from_control,
+            )
             if influencer_layer:
                 influencer_fraction = st.sidebar.slider(
                     "Influencer fraction",
                     0.01,
                     0.25,
-                    0.06,
+                    float(preset.get("influencer_fraction", 0.06)),
                     0.01,
+                    key=_control_key("influencer_fraction"),
+                    on_change=_mark_custom_from_control,
                 )
                 influencers_receive_from_peers = st.sidebar.checkbox(
                     "Peers can influence influencers",
-                    value=False,
+                    value=bool(preset.get("influencers_receive_from_peers", False)),
+                    key=_control_key("influencers_receive_from_peers"),
+                    on_change=_mark_custom_from_control,
                 )
         else:
             st.sidebar.caption(
@@ -142,31 +451,136 @@ def _sidebar_controls() -> dict:
         "Initial infected",
         1,
         min(80, n_nodes),
-        min(5, n_nodes),
+        min(int(preset.get("initial_infected", 5)), n_nodes),
         1,
+        key=_control_key("initial_infected"),
+        on_change=_mark_custom_from_control,
     )
-    max_steps = st.sidebar.slider("Maximum steps", 5, 200, 60, 5)
-    random_seed = st.sidebar.number_input("Random seed", min_value=0, value=42, step=1)
+    max_steps = st.sidebar.slider(
+        "Maximum steps",
+        5,
+        200,
+        int(preset.get("max_steps", 60)),
+        5,
+        key=_control_key("max_steps"),
+        on_change=_mark_custom_from_control,
+    )
+    random_seed = st.sidebar.number_input(
+        "Random seed",
+        min_value=0,
+        value=int(preset.get("random_seed", 42)),
+        step=1,
+        key=_control_key("random_seed"),
+        on_change=_mark_custom_from_control,
+    )
 
     st.sidebar.header("Model")
-    model = st.sidebar.radio("Contagion model", ["simple", "threshold"], horizontal=True)
-    simple_variant = "SIR"
-    beta = 0.30
-    sigma = 0.35
-    theta = 0.25
+    model_options = ["SIR", "SIS", "SEIR"]
+    simple_variant_default = preset.get("simple_variant", "SIR")
+    simple_variant = st.sidebar.selectbox(
+        "Contagion model",
+        model_options,
+        index=model_options.index(simple_variant_default),
+        key=_control_key("simple_variant"),
+        on_change=_mark_custom_from_control,
+    )
+    model = "simple"
+    seir_adoption_rule = preset.get("seir_adoption_rule", "probabilistic")
+    beta = float(preset.get("beta", 0.30))
+    sigma = float(preset.get("sigma", 0.35))
+    theta = float(preset.get("theta", 0.25))
+    complex_reinforcement = bool(preset.get("complex_reinforcement", False))
+    reinforcement_memory = float(preset.get("reinforcement_memory", 0.75))
 
-    if model == "simple":
-        simple_variant = st.sidebar.selectbox("Simple model type", ["SIR", "SIS", "SEIR"])
-        beta = st.sidebar.slider("beta", 0.0, 1.0, 0.30, 0.01)
-        if simple_variant == "SEIR":
-            sigma = st.sidebar.slider("sigma", 0.0, 1.0, 0.35, 0.01)
+    if simple_variant == "SEIR":
+        adoption_options = ["probabilistic", "threshold"]
+        seir_adoption_rule_default = preset.get("seir_adoption_rule", "probabilistic")
+        seir_adoption_rule = st.sidebar.radio(
+            "SEIR adoption rule",
+            adoption_options,
+            index=adoption_options.index(seir_adoption_rule_default),
+            horizontal=True,
+            key=_control_key("seir_adoption_rule"),
+            on_change=_mark_custom_from_control,
+        )
+        sigma = st.sidebar.slider(
+            "sigma",
+            0.0,
+            1.0,
+            float(preset.get("sigma", 0.35)),
+            0.01,
+            key=_control_key("sigma"),
+            on_change=_mark_custom_from_control,
+        )
+        if seir_adoption_rule == "threshold":
+            model = "threshold"
+            theta = st.sidebar.slider(
+                "theta",
+                0.0,
+                1.0,
+                float(preset.get("theta", 0.25)),
+                0.01,
+                key=_control_key("theta"),
+                on_change=_mark_custom_from_control,
+            )
+        else:
+            beta = st.sidebar.slider(
+                "beta",
+                0.0,
+                1.0,
+                float(preset.get("beta", 0.30)),
+                0.01,
+                key=_control_key("beta"),
+                on_change=_mark_custom_from_control,
+            )
+            complex_reinforcement = st.sidebar.checkbox(
+                "Complex reinforcement",
+                value=bool(preset.get("complex_reinforcement", False)),
+                key=_control_key("complex_reinforcement"),
+                on_change=_mark_custom_from_control,
+            )
+            if complex_reinforcement:
+                reinforcement_memory = st.sidebar.slider(
+                    "Memory retention",
+                    0.0,
+                    1.0,
+                    float(preset.get("reinforcement_memory", 0.75)),
+                    0.05,
+                    key=_control_key("reinforcement_memory"),
+                    on_change=_mark_custom_from_control,
+                )
     else:
-        theta = st.sidebar.slider("theta", 0.0, 1.0, 0.25, 0.01)
+        beta = st.sidebar.slider(
+            "beta",
+            0.0,
+            1.0,
+            float(preset.get("beta", 0.30)),
+            0.01,
+            key=_control_key("beta"),
+            on_change=_mark_custom_from_control,
+        )
 
-    gamma = st.sidebar.slider("gamma", 0.0, 1.0, 0.10, 0.01)
-    external_noise = st.sidebar.slider("external_noise", 0.0, 0.10, 0.00, 0.001)
+    gamma = st.sidebar.slider(
+        "gamma",
+        0.0,
+        1.0,
+        float(preset.get("gamma", 0.10)),
+        0.01,
+        key=_control_key("gamma"),
+        on_change=_mark_custom_from_control,
+    )
+    external_noise = st.sidebar.slider(
+        "external_noise",
+        0.0,
+        0.10,
+        float(preset.get("external_noise", 0.00)),
+        0.001,
+        key=_control_key("external_noise"),
+        on_change=_mark_custom_from_control,
+    )
 
-    return {
+    params = {
+        "experiment_name": experiment_name,
         "n_nodes": n_nodes,
         "average_degree": average_degree,
         "topology": topology,
@@ -181,9 +595,12 @@ def _sidebar_controls() -> dict:
         "random_seed": int(random_seed),
         "model": model,
         "simple_variant": simple_variant,
+        "seir_adoption_rule": seir_adoption_rule,
         "beta": beta,
         "sigma": sigma,
         "theta": theta,
+        "complex_reinforcement": complex_reinforcement,
+        "reinforcement_memory": reinforcement_memory,
         "gamma": gamma,
         "external_noise": external_noise,
         "visual_theme": visual_theme,
@@ -191,6 +608,9 @@ def _sidebar_controls() -> dict:
         "stage_height": stage_height,
         "stage_width": stage_width,
     }
+    if experiment_name == CUSTOM_EXPERIMENT:
+        _save_custom_controls()
+    return params
 
 
 def _inject_style(visual_theme: str) -> None:
@@ -461,43 +881,113 @@ def _run_model(params: dict) -> dict:
         simple_variant=params["simple_variant"],
         external_noise=params["external_noise"],
         initial_infected_nodes=initial_infected_nodes,
+        complex_reinforcement=params["complex_reinforcement"],
+        reinforcement_memory=params["reinforcement_memory"],
     )
 
-    beta_sweep = run_beta_sweep(
-        graph=graph,
-        beta_values=BETA_SWEEP,
-        max_steps=params["max_steps"],
-        initial_infected_count=params["initial_infected"],
-        seed_mode=params["seed_mode"],
-        random_seed=params["random_seed"],
-        gamma=params["gamma"],
-        sigma=params["sigma"],
-        simple_variant=params["simple_variant"],
-        external_noise=params["external_noise"],
-        initial_infected_nodes=initial_infected_nodes,
-    )
-    theta_sweep = run_theta_sweep(
-        graph=graph,
-        theta_values=THETA_SWEEP,
-        max_steps=params["max_steps"],
-        initial_infected_count=params["initial_infected"],
-        seed_mode=params["seed_mode"],
-        random_seed=params["random_seed"],
-        gamma=params["gamma"],
-        external_noise=params["external_noise"],
-        initial_infected_nodes=initial_infected_nodes,
-    )
+    sweeps = _run_active_sweeps(graph, params, initial_infected_nodes)
 
     return {
         "graph": graph,
         "pos": pos,
         "result": result,
-        "beta_sweep": beta_sweep,
-        "theta_sweep": theta_sweep,
+        "sweeps": sweeps,
         "topology": params["topology"],
         "params": params.copy(),
         "higgs_metadata": higgs_metadata,
     }
+
+
+def _run_active_sweeps(graph, params: dict, initial_infected_nodes) -> list[dict]:
+    common = {
+        "graph": graph,
+        "max_steps": params["max_steps"],
+        "initial_infected_count": params["initial_infected"],
+        "seed_mode": params["seed_mode"],
+        "random_seed": params["random_seed"],
+        "gamma": params["gamma"],
+        "external_noise": params["external_noise"],
+        "initial_infected_nodes": initial_infected_nodes,
+    }
+    gamma_sweep = {
+        "parameter": "gamma",
+        "title": "Cascade size vs gamma",
+        "data": run_gamma_sweep(
+            graph=graph,
+            gamma_values=GAMMA_SWEEP,
+            max_steps=params["max_steps"],
+            initial_infected_count=params["initial_infected"],
+            seed_mode=params["seed_mode"],
+            random_seed=params["random_seed"],
+            model=params["model"],
+            beta=params["beta"],
+            sigma=params["sigma"],
+            theta=params["theta"],
+            simple_variant=params["simple_variant"],
+            external_noise=params["external_noise"],
+            initial_infected_nodes=initial_infected_nodes,
+            complex_reinforcement=params["complex_reinforcement"],
+            reinforcement_memory=params["reinforcement_memory"],
+        ),
+    }
+
+    if params["model"] == "threshold":
+        return [
+            {
+                "parameter": "theta",
+                "title": "Cascade size vs theta",
+                "data": run_theta_sweep(
+                    theta_values=THETA_SWEEP,
+                    sigma=params["sigma"],
+                    **common,
+                ),
+            },
+            {
+                "parameter": "sigma",
+                "title": "Cascade size vs sigma",
+                "data": run_sigma_sweep(
+                    sigma_values=SIGMA_SWEEP,
+                    beta=params["beta"],
+                    model=params["model"],
+                    theta=params["theta"],
+                    **common,
+                ),
+            },
+            gamma_sweep,
+        ]
+
+    sweeps = [
+        {
+            "parameter": "beta",
+            "title": "Cascade size vs beta",
+            "data": run_beta_sweep(
+                beta_values=BETA_SWEEP,
+                sigma=params["sigma"],
+                simple_variant=params["simple_variant"],
+                complex_reinforcement=params["complex_reinforcement"],
+                reinforcement_memory=params["reinforcement_memory"],
+                **common,
+            ),
+        }
+    ]
+    if params["simple_variant"] == "SEIR":
+        sweeps.append(
+            {
+                "parameter": "sigma",
+                "title": "Cascade size vs sigma",
+                "data": run_sigma_sweep(
+                    sigma_values=SIGMA_SWEEP,
+                    beta=params["beta"],
+                    model=params["model"],
+                    theta=params["theta"],
+                    complex_reinforcement=params["complex_reinforcement"],
+                    reinforcement_memory=params["reinforcement_memory"],
+                    **common,
+                ),
+            }
+        )
+    sweeps.append(gamma_sweep)
+    return sweeps
 
 
 def _show_metrics(metrics: dict[str, float], graph) -> None:
@@ -521,6 +1011,94 @@ def _show_higgs_summary(metadata: dict[str, object]) -> None:
     cols[1].metric("Raw activity events", f"{metadata['raw_activity_events']:,}")
     cols[2].metric("Sample users", f"{metadata['sample_nodes']:,}")
     cols[3].metric("Sample edges", f"{metadata['sample_edges']:,}")
+
+
+def _show_experiments(params: dict) -> None:
+    experiment = EXPERIMENT_PRESETS[params["experiment_name"]]
+    st.subheader("Experiment presets")
+
+    if params["experiment_name"] == CUSTOM_EXPERIMENT:
+        st.info(
+            "Custom mode leaves the controls editable. Select a preset in the "
+            "sidebar to load a fixed experiment with an interpretation."
+        )
+    else:
+        st.markdown(f"#### {experiment['title']}")
+        cols = st.columns(3)
+        cols[0].metric("Model", experiment["model_family"])
+        cols[1].metric("Topology", params["topology"])
+        cols[2].metric("Preset", "editable")
+        st.markdown(f"**Question:** {experiment['question']}")
+        st.markdown(f"**Interpretation:** {experiment['interpretation']}")
+        st.markdown(f"**What to look for:** {experiment['expected']}")
+
+        st.markdown("#### Fixed parameters")
+        st.dataframe(
+            _experiment_parameter_rows(params),
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Preset catalog"):
+        rows = []
+        for name, preset in EXPERIMENT_PRESETS.items():
+            if name == CUSTOM_EXPERIMENT:
+                continue
+            rows.append(
+                {
+                    "Preset": name,
+                    "Model": preset["model_family"],
+                    "Question": preset["question"],
+                    "Interpretation": preset["interpretation"],
+                }
+            )
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+
+def _experiment_parameter_rows(params: dict) -> list[dict[str, object]]:
+    keys = [
+        "topology",
+        "n_nodes",
+        "average_degree",
+        "influencer_layer",
+        "influencer_fraction",
+        "influencers_receive_from_peers",
+        "min_edge_weight",
+        "reverse_retweets",
+        "initial_infected",
+        "max_steps",
+        "random_seed",
+        "simple_variant",
+        "seir_adoption_rule",
+        "beta",
+        "sigma",
+        "theta",
+        "complex_reinforcement",
+        "reinforcement_memory",
+        "gamma",
+        "external_noise",
+    ]
+    rows = []
+    for key in keys:
+        value = params.get(key)
+        if value is None:
+            continue
+        if key == "average_degree" and params["topology"] == HIGGS_TWITTER_TOPOLOGY:
+            continue
+        if key in {"min_edge_weight", "reverse_retweets"} and params["topology"] != HIGGS_TWITTER_TOPOLOGY:
+            continue
+        if key.startswith("influencer") and params["topology"] != BARABASI_ALBERT:
+            continue
+        if key == "seir_adoption_rule" and params["simple_variant"] != "SEIR":
+            continue
+        if key == "sigma" and params["simple_variant"] != "SEIR":
+            continue
+        if key == "theta" and params["model"] != "threshold":
+            continue
+        if key in {"complex_reinforcement", "reinforcement_memory"} and not params["complex_reinforcement"]:
+            continue
+        rows.append({"Parameter": key, "Value": str(value)})
+    return rows
 
 
 def _show_higgs_data_tab(graph, result, payload) -> None:
@@ -640,6 +1218,7 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
     if payload.get("higgs_metadata"):
         (
             overview_tab,
+            experiments_tab,
             snapshots_tab,
             sweeps_tab,
             topologies_tab,
@@ -649,6 +1228,7 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
         ) = st.tabs(
             [
                 "Overview",
+                "Experiments",
                 "Snapshots",
                 "Parameter sweeps",
                 "Topologies",
@@ -658,8 +1238,16 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
             ]
         )
     else:
-        overview_tab, snapshots_tab, sweeps_tab, topologies_tab, math_tab, export_tab = st.tabs(
-            ["Overview", "Snapshots", "Parameter sweeps", "Topologies", "Mathematics", "Export"]
+        overview_tab, experiments_tab, snapshots_tab, sweeps_tab, topologies_tab, math_tab, export_tab = st.tabs(
+            [
+                "Overview",
+                "Experiments",
+                "Snapshots",
+                "Parameter sweeps",
+                "Topologies",
+                "Mathematics",
+                "Export",
+            ]
         )
         data_tab = None
 
@@ -669,11 +1257,14 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
             _show_higgs_summary(payload["higgs_metadata"])
         _show_curves(result)
 
+    with experiments_tab:
+        _show_experiments(payload["params"])
+
     with snapshots_tab:
         _show_snapshots(graph, result, pos)
 
     with sweeps_tab:
-        _show_sweeps(payload["beta_sweep"], payload["theta_sweep"])
+        _show_sweeps(payload["sweeps"])
 
     with topologies_tab:
         _show_topology_math(graph, payload["params"])
@@ -696,22 +1287,23 @@ def _show_curves(result) -> None:
     plt.close(fig)
 
 
-def _show_sweeps(beta_sweep, theta_sweep) -> None:
+def _show_sweeps(sweeps: list[dict]) -> None:
     st.subheader("Automatic comparison")
-    cols = st.columns(2)
+    if not sweeps:
+        st.info("No parameter sweeps are available for the selected model.")
+        return
 
-    fig_beta = plot_sweep(beta_sweep, "beta", "Cascade size vs beta")
-    cols[0].pyplot(fig_beta, clear_figure=True)
-    plt.close(fig_beta)
-
-    fig_theta = plot_sweep(theta_sweep, "theta", "Cascade size vs theta")
-    cols[1].pyplot(fig_theta, clear_figure=True)
-    plt.close(fig_theta)
+    cols = st.columns(len(sweeps))
+    for col, sweep in zip(cols, sweeps):
+        fig = plot_sweep(sweep["data"], sweep["parameter"], sweep["title"])
+        col.pyplot(fig, clear_figure=True)
+        plt.close(fig)
 
     with st.expander("Sweep data"):
-        left, right = st.columns(2)
-        left.dataframe(beta_sweep, width="stretch", hide_index=True)
-        right.dataframe(theta_sweep, width="stretch", hide_index=True)
+        data_cols = st.columns(len(sweeps))
+        for col, sweep in zip(data_cols, sweeps):
+            col.markdown(f"**{sweep['parameter']} sweep**")
+            col.dataframe(sweep["data"], width="stretch", hide_index=True)
 
 
 def _show_model_math(graph, result, params: dict) -> None:
@@ -746,9 +1338,7 @@ def _show_model_math(graph, result, params: dict) -> None:
             "an edge `u -> v` lets `u` influence `v`, not the reverse."
         )
 
-    sir_tab, sis_tab, seir_tab, threshold_tab = st.tabs(
-        ["SIR", "SIS", "SEIR", "Threshold"]
-    )
+    sir_tab, sis_tab, seir_tab = st.tabs(["SIR", "SIS", "SEIR"])
     with sir_tab:
         _show_simple_model_math(
             title="Simple contagion: SIR",
@@ -777,9 +1367,11 @@ def _show_model_math(graph, result, params: dict) -> None:
             ),
             exposed=True,
             sis=False,
+            reinforcement=params["complex_reinforcement"],
+            reinforcement_memory=params["reinforcement_memory"],
+            threshold_adoption=params["model"] == "threshold",
+            theta=params["theta"],
         )
-    with threshold_tab:
-        _show_threshold_model_math(params)
 
 
 def _show_topology_math(graph, params: dict) -> None:
@@ -948,15 +1540,15 @@ def _show_current_math_context(graph, result, params: dict) -> None:
             else params["beta"] * average_degree / params["gamma"]
         )
         st.info(
-            "For the selected simple model, a rough early-spread heuristic is "
+            "For the selected probabilistic model, a rough early-spread heuristic is "
             f"beta * average_degree / gamma = {_format_float_or_inf(rough_r)}. "
             "It is a presentation aid, not a replacement for the network simulation."
         )
     else:
         st.info(
-            "For the selected threshold model, adoption is deterministic once "
-            "the infected-neighbor fraction reaches theta; external noise only "
-            "matters below that threshold."
+            "For SEIR with threshold adoption, exposure is deterministic once "
+            "the infected-neighbor fraction reaches theta; exposed nodes still "
+            "activate through sigma."
         )
 
     parameter_rows = [
@@ -966,46 +1558,89 @@ def _show_current_math_context(graph, result, params: dict) -> None:
             "Meaning": "Network structure used for exposure paths",
         },
         {
-            "Parameter": "model",
-            "Current value": params["model"],
-            "Meaning": "Simple probabilistic or threshold contagion",
+            "Parameter": "contagion_model",
+            "Current value": params["simple_variant"],
+            "Meaning": "State-transition model",
         },
         {
             "Parameter": "variant",
             "Current value": result.variant,
-            "Meaning": "SIR, SIS, SEIR, or threshold",
-        },
-        {
-            "Parameter": "beta",
-            "Current value": f"{params['beta']:.2f}",
-            "Meaning": "Per-neighbor transmission probability in simple contagion",
-        },
-        {
-            "Parameter": "sigma",
-            "Current value": f"{params['sigma']:.2f}",
-            "Meaning": "E -> I activation probability in SEIR",
-        },
-        {
-            "Parameter": "theta",
-            "Current value": f"{params['theta']:.2f}",
-            "Meaning": "Required infected-neighbor fraction in threshold contagion",
-        },
-        {
-            "Parameter": "gamma",
-            "Current value": f"{params['gamma']:.2f}",
-            "Meaning": "I recovery probability per step",
-        },
-        {
-            "Parameter": "external_noise",
-            "Current value": f"{params['external_noise']:.3f}",
-            "Meaning": "Outside adoption probability when contagion does not trigger",
-        },
-        {
-            "Parameter": "random_seed",
-            "Current value": str(params["random_seed"]),
-            "Meaning": "Controls reproducible network and random draws",
+            "Meaning": "Active adoption and state-transition variant",
         },
     ]
+    if params["simple_variant"] in {"SIR", "SIS"}:
+        parameter_rows.append(
+            {
+                "Parameter": "beta",
+                "Current value": f"{params['beta']:.2f}",
+                "Meaning": "Per-neighbor transmission probability in simple contagion",
+            }
+        )
+    elif params["simple_variant"] == "SEIR":
+        parameter_rows.extend(
+            [
+                {
+                    "Parameter": "seir_adoption_rule",
+                    "Current value": params["seir_adoption_rule"],
+                    "Meaning": "How susceptible nodes enter the exposed state",
+                },
+                {
+                    "Parameter": "sigma",
+                    "Current value": f"{params['sigma']:.2f}",
+                    "Meaning": "E -> I activation probability in SEIR",
+                },
+            ]
+        )
+        if params["model"] == "threshold":
+            parameter_rows.append(
+                {
+                    "Parameter": "theta",
+                    "Current value": f"{params['theta']:.2f}",
+                    "Meaning": "Required infected-neighbor fraction for S -> E",
+                }
+            )
+        else:
+            parameter_rows.extend(
+                [
+                    {
+                        "Parameter": "beta",
+                        "Current value": f"{params['beta']:.2f}",
+                        "Meaning": "Per-neighbor exposure probability for S -> E",
+                    },
+                    {
+                        "Parameter": "complex_reinforcement",
+                        "Current value": str(params["complex_reinforcement"]),
+                        "Meaning": "Whether susceptible SEIR nodes remember past exposures",
+                    },
+                ]
+            )
+        if params["complex_reinforcement"]:
+            parameter_rows.append(
+                {
+                    "Parameter": "reinforcement_memory",
+                    "Current value": f"{params['reinforcement_memory']:.2f}",
+                    "Meaning": "Fraction of remembered exposure pressure kept each step",
+                }
+            )
+    parameter_rows.extend(
+        [
+            {
+                "Parameter": "gamma",
+                "Current value": f"{params['gamma']:.2f}",
+                "Meaning": "I recovery probability per step",
+            },
+            {
+                "Parameter": "external_noise",
+                "Current value": f"{params['external_noise']:.3f}",
+                "Meaning": "Outside adoption probability when contagion does not trigger",
+            },
+            {
+                "Parameter": "random_seed",
+                "Current value": str(params["random_seed"]),
+                "Meaning": "Controls reproducible network and random draws",
+            },
+        ]
+    )
     if graph.is_directed() and params["topology"] == HIGGS_TWITTER_TOPOLOGY:
         parameter_rows.insert(
             1,
@@ -1084,13 +1719,41 @@ def _show_simple_model_math(
     transition_text: str,
     exposed: bool,
     sis: bool,
+    reinforcement: bool = False,
+    reinforcement_memory: float = 0.75,
+    threshold_adoption: bool = False,
+    theta: float = 0.25,
 ) -> None:
     st.markdown(f"#### {title}")
     st.markdown(transition_text)
-    st.latex(r"q_i(t)=1-(1-\beta)^{m_i(t)}")
+    if threshold_adoption:
+        st.latex(
+            r"P(S_i \rightarrow E)=\begin{cases}"
+            r"1, & k_i>0 \ \mathrm{and}\ \frac{m_i(t)}{k_i}\geq\theta\\"
+            r"\epsilon, & \mathrm{otherwise}"
+            r"\end{cases}"
+        )
+        st.markdown(
+            f"With the current theta={theta:.2f}, SEIR exposure requires enough "
+            "infected predecessors at the same step."
+        )
+    elif reinforcement:
+        st.latex(
+            rf"r_i(t)=\min(k_i,\ {reinforcement_memory:.2f}\,r_i(t-1)+m_i(t))"
+        )
+        st.latex(r"q_i(t)=1-(1-\beta)^{r_i(t)}")
+        st.markdown(
+            "`r_i(t)` is remembered exposure pressure. The memory-retention "
+            "parameter controls how much prior pressure remains each step."
+        )
+    else:
+        st.latex(r"q_i(t)=1-(1-\beta)^{m_i(t)}")
 
-    if exposed:
+    if exposed and not threshold_adoption:
         st.latex(r"P(S_i \rightarrow E)=q_i(t)+(1-q_i(t))\epsilon")
+        st.latex(r"P(E_i \rightarrow I)=\sigma")
+        st.latex(r"P(I_i \rightarrow R)=\gamma")
+    elif exposed:
         st.latex(r"P(E_i \rightarrow I)=\sigma")
         st.latex(r"P(I_i \rightarrow R)=\gamma")
     elif sis:
@@ -1100,31 +1763,12 @@ def _show_simple_model_math(
         st.latex(r"P(S_i \rightarrow I)=q_i(t)+(1-q_i(t))\epsilon")
         st.latex(r"P(I_i \rightarrow R)=\gamma")
 
-    st.markdown(
-        "The term `1 - (1 - beta)^m` means each infected neighbor gets one "
-        "independent chance to transmit. If neighbor contagion fails, the "
-        "external-noise draw can still create adoption."
-    )
-
-
-def _show_threshold_model_math(params: dict) -> None:
-    st.markdown("#### Complex contagion: threshold")
-    st.markdown(
-        "State path: `S -> I -> R`. Adoption needs enough infected neighbors "
-        "at the same time."
-    )
-    st.latex(
-        r"P(S_i \rightarrow I)=\begin{cases}"
-        r"1, & k_i>0 \ \mathrm{and}\ \frac{m_i(t)}{k_i}\geq\theta\\"
-        r"\epsilon, & \mathrm{otherwise}"
-        r"\end{cases}"
-    )
-    st.latex(r"P(I_i \rightarrow R)=\gamma")
-    st.markdown(
-        "For a node with degree `k`, a single infected neighbor is sufficient "
-        f"only when `1 / k >= theta`. With the current theta={params['theta']:.2f}, "
-        "high-degree nodes usually need several infected neighbors at once."
-    )
+    if not threshold_adoption:
+        st.markdown(
+            "The term `1 - (1 - beta)^m` means each infected neighbor gets one "
+            "independent chance to transmit. If neighbor contagion fails, the "
+            "external-noise draw can still create adoption."
+        )
 
 
 def _contagion_profile(graph, state, params: dict) -> dict[str, float]:

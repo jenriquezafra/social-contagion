@@ -55,6 +55,8 @@ def run_simulation(
     simple_variant: SimpleVariant = "SIR",
     external_noise: float = 0.0,
     initial_infected_nodes: Sequence[int] | None = None,
+    complex_reinforcement: bool = False,
+    reinforcement_memory: float = 0.75,
 ) -> SimulationResult:
     """Run a synchronous contagion process on a graph."""
     rng = np.random.default_rng(random_seed)
@@ -72,6 +74,8 @@ def run_simulation(
     states = [state.copy()]
     events = [_empty_step_events()]
     ever_infected = state == INFECTED
+    reinforcement_memory = max(0.0, min(1.0, float(reinforcement_memory)))
+    exposure_memory = np.zeros(graph.number_of_nodes(), dtype=float)
     history_rows = [_count_state_row(t=0, state=state, ever_infected=ever_infected)]
 
     for step in range(1, max_steps + 1):
@@ -88,12 +92,20 @@ def run_simulation(
                     beta=beta,
                     theta=theta,
                     external_noise=external_noise,
+                    complex_reinforcement=(
+                        complex_reinforcement
+                        and model == "simple"
+                        and simple_variant == "SEIR"
+                    ),
+                    reinforcement_memory=reinforcement_memory,
+                    exposure_memory=exposure_memory,
                     rng=rng,
                 )
                 if infected:
                     new_state = _new_contagion_state(model, simple_variant)
                     next_state[node] = new_state
                     _record_transition(step_events, node, SUSCEPTIBLE, new_state, "contagion")
+                    exposure_memory[node] = 0
                     step_events["contagions"].append(
                         {
                             "target": int(node),
@@ -103,7 +115,7 @@ def run_simulation(
                         }
                     )
             elif state[node] == EXPOSED:
-                if model == "simple" and simple_variant == "SEIR" and rng.random() < sigma:
+                if simple_variant == "SEIR" and rng.random() < sigma:
                     next_state[node] = INFECTED
                     _record_transition(step_events, node, EXPOSED, INFECTED, "activation")
             elif state[node] == INFECTED and rng.random() < gamma:
@@ -129,7 +141,13 @@ def run_simulation(
         metrics=metrics,
         initial_infected=initial_infected,
         model=model,
-        variant=simple_variant if model == "simple" else "threshold",
+        variant=(
+            "SEIR-threshold"
+            if model == "threshold" and simple_variant == "SEIR"
+            else simple_variant
+            if model == "simple"
+            else "threshold"
+        ),
     )
 
 
@@ -201,6 +219,8 @@ def run_beta_sweep(
     external_noise: float,
     sigma: float = 0.3,
     initial_infected_nodes: Sequence[int] | None = None,
+    complex_reinforcement: bool = False,
+    reinforcement_memory: float = 0.75,
 ) -> pd.DataFrame:
     """Run simple contagion for several beta values."""
     rows = []
@@ -218,6 +238,8 @@ def run_beta_sweep(
             simple_variant=simple_variant,
             external_noise=external_noise,
             initial_infected_nodes=initial_infected_nodes,
+            complex_reinforcement=complex_reinforcement,
+            reinforcement_memory=reinforcement_memory,
         )
         rows.append(
             {
@@ -238,9 +260,10 @@ def run_theta_sweep(
     random_seed: int,
     gamma: float,
     external_noise: float,
+    sigma: float = 0.3,
     initial_infected_nodes: Sequence[int] | None = None,
 ) -> pd.DataFrame:
-    """Run threshold contagion for several theta values."""
+    """Run SEIR threshold contagion for several theta values."""
     rows = []
     for theta in theta_values:
         result = run_simulation(
@@ -252,12 +275,107 @@ def run_theta_sweep(
             random_seed=random_seed,
             theta=theta,
             gamma=gamma,
+            sigma=sigma,
+            simple_variant="SEIR",
             external_noise=external_noise,
             initial_infected_nodes=initial_infected_nodes,
         )
         rows.append(
             {
                 "theta": theta,
+                "cascade_size": result.metrics["final_cascade_size"],
+                "peak_infected_fraction": result.metrics["peak_infected_fraction"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def run_sigma_sweep(
+    graph: nx.Graph,
+    sigma_values: list[float],
+    max_steps: int,
+    initial_infected_count: int,
+    seed_mode: SeedMode,
+    random_seed: int,
+    beta: float,
+    gamma: float,
+    external_noise: float,
+    model: ModelName = "simple",
+    theta: float = 0.25,
+    initial_infected_nodes: Sequence[int] | None = None,
+    complex_reinforcement: bool = False,
+    reinforcement_memory: float = 0.75,
+) -> pd.DataFrame:
+    """Run SEIR contagion for several sigma values."""
+    rows = []
+    for sigma in sigma_values:
+        result = run_simulation(
+            graph=graph,
+            model=model,
+            max_steps=max_steps,
+            initial_infected_count=initial_infected_count,
+            seed_mode=seed_mode,
+            random_seed=random_seed,
+            beta=beta,
+            gamma=gamma,
+            sigma=sigma,
+            theta=theta,
+            simple_variant="SEIR",
+            external_noise=external_noise,
+            initial_infected_nodes=initial_infected_nodes,
+            complex_reinforcement=complex_reinforcement,
+            reinforcement_memory=reinforcement_memory,
+        )
+        rows.append(
+            {
+                "sigma": sigma,
+                "cascade_size": result.metrics["final_cascade_size"],
+                "peak_infected_fraction": result.metrics["peak_infected_fraction"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def run_gamma_sweep(
+    graph: nx.Graph,
+    gamma_values: list[float],
+    max_steps: int,
+    initial_infected_count: int,
+    seed_mode: SeedMode,
+    random_seed: int,
+    model: ModelName,
+    beta: float,
+    sigma: float,
+    theta: float,
+    simple_variant: SimpleVariant,
+    external_noise: float,
+    initial_infected_nodes: Sequence[int] | None = None,
+    complex_reinforcement: bool = False,
+    reinforcement_memory: float = 0.75,
+) -> pd.DataFrame:
+    """Run the active contagion model for several gamma values."""
+    rows = []
+    for gamma in gamma_values:
+        result = run_simulation(
+            graph=graph,
+            model=model,
+            max_steps=max_steps,
+            initial_infected_count=initial_infected_count,
+            seed_mode=seed_mode,
+            random_seed=random_seed,
+            beta=beta,
+            gamma=gamma,
+            sigma=sigma,
+            theta=theta,
+            simple_variant=simple_variant,
+            external_noise=external_noise,
+            initial_infected_nodes=initial_infected_nodes,
+            complex_reinforcement=complex_reinforcement,
+            reinforcement_memory=reinforcement_memory,
+        )
+        rows.append(
+            {
+                "gamma": gamma,
                 "cascade_size": result.metrics["final_cascade_size"],
                 "peak_infected_fraction": result.metrics["peak_infected_fraction"],
             }
@@ -273,6 +391,9 @@ def _infection_trigger(
     beta: float,
     theta: float,
     external_noise: float,
+    complex_reinforcement: bool,
+    reinforcement_memory: float,
+    exposure_memory: np.ndarray,
     rng: np.random.Generator,
 ) -> tuple[bool, list[int], str]:
     infected_neighbors = [
@@ -281,12 +402,26 @@ def _infection_trigger(
     ]
 
     if model == "simple":
-        if infected_neighbors:
-            infection_probability = 1.0 - (1.0 - beta) ** len(infected_neighbors)
+        exposure_count = len(infected_neighbors)
+        trigger = "neighbor"
+        if complex_reinforcement:
+            degree = _exposure_degree(graph, node)
+            exposure_memory[node] = min(
+                max(1, degree),
+                exposure_memory[node] * reinforcement_memory + exposure_count,
+            )
+            exposure_count = float(exposure_memory[node])
+            trigger = "reinforcement"
+
+        if exposure_count:
+            infection_probability = 1.0 - (1.0 - beta) ** exposure_count
             if rng.random() < infection_probability:
-                return True, [_primary_cause(graph, infected_neighbors)], "neighbor"
-        else:
-            contagion = False
+                sources = (
+                    [_primary_cause(graph, infected_neighbors)]
+                    if infected_neighbors
+                    else []
+                )
+                return True, sources, trigger
     elif model == "threshold":
         degree = _exposure_degree(graph, node)
         if degree > 0 and len(infected_neighbors) / degree >= theta:
@@ -302,7 +437,7 @@ def _infection_trigger(
 
 
 def _new_contagion_state(model: ModelName, simple_variant: SimpleVariant) -> int:
-    if model == "simple" and simple_variant == "SEIR":
+    if simple_variant == "SEIR":
         return EXPOSED
     return INFECTED
 
