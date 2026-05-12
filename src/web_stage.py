@@ -905,16 +905,28 @@ def _is_influencer_node(graph: nx.Graph, node: int) -> bool:
 
 
 def _stage_kicker(graph: nx.Graph, topology: str, variant: str) -> str:
+    if graph.graph.get("data_source") == "twitter_higgs":
+        return f"Twitter Higgs retweets / {variant}"
     if graph.is_directed():
-        return f"Directed influence / {variant}"
+        return f"Barabasi-Albert influence layer / {variant}"
     return f"{topology} network / {variant}"
 
 
 def _stage_subtitle(graph: nx.Graph) -> str:
-    if graph.is_directed():
+    if graph.graph.get("data_source") == "twitter_higgs":
         return (
-            "Arrows show who can transmit influence; influencer nodes broadcast "
-            "without incoming social ties."
+            "Arrows reverse observed retweets: the retweeted account points "
+            "toward the user who retweeted it."
+        )
+    if graph.is_directed():
+        if graph.graph.get("influencers_receive_from_peers"):
+            return (
+                "Arrows show directed influence on a BA graph; influencers "
+                "can listen to peers and other influencers."
+            )
+        return (
+            "Arrows show directed influence on a BA graph; influencers listen "
+            "to other influencers, but not to peers."
         )
     return (
         "A real-time view of adoption pressure, exposure and recovery across a "

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Literal
 
 import networkx as nx
@@ -24,7 +25,7 @@ STATE_LABELS = {
 
 ModelName = Literal["simple", "threshold"]
 SimpleVariant = Literal["SIR", "SIS", "SEIR"]
-SeedMode = Literal["random", "hubs"]
+SeedMode = Literal["random"]
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ def run_simulation(
     theta: float = 0.25,
     simple_variant: SimpleVariant = "SIR",
     external_noise: float = 0.0,
+    initial_infected_nodes: Sequence[int] | None = None,
 ) -> SimulationResult:
     """Run a synchronous contagion process on a graph."""
     rng = np.random.default_rng(random_seed)
@@ -61,6 +63,7 @@ def run_simulation(
         n_initial=initial_infected_count,
         mode=seed_mode,
         rng=rng,
+        initial_nodes=initial_infected_nodes,
     )
 
     state = np.full(graph.number_of_nodes(), SUSCEPTIBLE, dtype=np.int8)
@@ -135,19 +138,36 @@ def choose_initial_infected(
     n_initial: int,
     mode: SeedMode,
     rng: np.random.Generator,
+    initial_nodes: Sequence[int] | None = None,
 ) -> list[int]:
-    """Select initial infected nodes either randomly or by strongest influence."""
+    """Select initial infected nodes from provided seeds or randomly."""
     n_nodes = graph.number_of_nodes()
     n_initial = max(1, min(int(n_initial), n_nodes))
 
+    if initial_nodes is not None:
+        graph_nodes = set(graph.nodes)
+        selected = []
+        seen = set()
+        for node in initial_nodes:
+            node = int(node)
+            if node in graph_nodes and node not in seen:
+                selected.append(node)
+                seen.add(node)
+            if len(selected) >= n_initial:
+                return sorted(selected)
+
+        if selected:
+            remaining = [node for node in graph.nodes if node not in seen]
+            fill_count = min(n_initial - len(selected), len(remaining))
+            if fill_count:
+                selected.extend(
+                    int(node)
+                    for node in rng.choice(remaining, size=fill_count, replace=False).tolist()
+                )
+            return sorted(selected)
+
     if mode == "random":
         return sorted(rng.choice(n_nodes, size=n_initial, replace=False).tolist())
-    if mode == "hubs":
-        ranked_nodes = sorted(
-            graph.nodes,
-            key=lambda node: (-_influence_degree(graph, node), node),
-        )
-        return sorted(ranked_nodes[:n_initial])
     raise ValueError(f"Unknown seed mode: {mode}")
 
 
@@ -180,6 +200,7 @@ def run_beta_sweep(
     simple_variant: SimpleVariant,
     external_noise: float,
     sigma: float = 0.3,
+    initial_infected_nodes: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     """Run simple contagion for several beta values."""
     rows = []
@@ -196,6 +217,7 @@ def run_beta_sweep(
             sigma=sigma,
             simple_variant=simple_variant,
             external_noise=external_noise,
+            initial_infected_nodes=initial_infected_nodes,
         )
         rows.append(
             {
@@ -216,6 +238,7 @@ def run_theta_sweep(
     random_seed: int,
     gamma: float,
     external_noise: float,
+    initial_infected_nodes: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     """Run threshold contagion for several theta values."""
     rows = []
@@ -230,6 +253,7 @@ def run_theta_sweep(
             theta=theta,
             gamma=gamma,
             external_noise=external_noise,
+            initial_infected_nodes=initial_infected_nodes,
         )
         rows.append(
             {

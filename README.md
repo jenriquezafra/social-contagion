@@ -2,7 +2,9 @@
 
 Local Streamlit app for a Complex Systems presentation on social contagion in
 networks. It compares simple SIR/SIS/SEIR contagion with complex threshold
-contagion across undirected networks and directed influencer networks.
+contagion across undirected networks, with an optional directed influencer layer
+on Barabasi-Albert networks, and a real Twitter retweet sample from the SNAP
+Higgs rumor dataset.
 
 ## Features
 
@@ -11,9 +13,10 @@ contagion across undirected networks and directed influencer networks.
   - Watts-Strogatz
   - Barabasi-Albert
   - Scale-Free
-  - Directed Influencers
-- Directed influencer networks where arrows represent one-way influence.
-- Initial infected nodes selected at random or from hubs.
+- Optional influencer layer on Barabasi-Albert networks.
+- Real Twitter mode using SNAP Higgs retweets and activity from July 1-7, 2012.
+- Initial infected nodes selected at random for synthetic runs or from earliest
+  observed activity for Twitter runs.
 - Simple contagion with SIR, SIS, or SEIR dynamics.
 - Complex threshold contagion.
 - External noise for media, algorithms, or outside influence.
@@ -24,8 +27,10 @@ contagion across undirected networks and directed influencer networks.
 - Stage size controls for wide, compact, or tall presentation formats.
 - Step-based playback with stable node colors and a synchronized curve marker.
 - Pan and zoom inside the main network canvas with drag, scroll, buttons, and double-click reset.
-- Analysis tabs for snapshots, time series, parameter sweeps, and export.
-- Mathematics tab with the transition equations, current parameter values, and
+- Analysis tabs for snapshots, time series, parameter sweeps, topology notes,
+  mathematics, Twitter data, and export.
+- Topologies tab with network-generation equations and current graph metrics.
+- Mathematics tab with transition equations, current parameter values, and
   derived pressure metrics for the active run.
 - Initial, peak, and final network snapshots.
 - S(t), E(t), I(t), R(t) curves.
@@ -92,6 +97,30 @@ If you do not activate the virtual environment, run Streamlit directly from it:
 .venv/bin/streamlit run app.py
 ```
 
+## Twitter Higgs Data
+
+The app can use the public SNAP Higgs Twitter dataset. It models retweet
+diffusion around the Higgs boson announcement from July 1-7, 2012.
+
+Download the two small files used by the app:
+
+```bash
+python scripts/download_higgs_twitter.py
+```
+
+The sidebar also has a `Download Higgs data` button when the files are missing.
+The app stores them under:
+
+```text
+data/higgs-twitter/raw/
+```
+
+For simulation, a raw retweet action `A retweets B` is reversed into the
+influence edge `B -> A`, so arrows point from the source account toward the
+retweeter.
+
+Source: https://snap.stanford.edu/data/higgs-twitter.html
+
 ## Parameters
 
 ### Appearance
@@ -107,17 +136,21 @@ If you do not activate the virtual environment, run Streamlit directly from it:
 
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `Number of nodes` | `20` to `500` | `150` | Number of agents in the graph. |
-| `Average degree` | `1` to `30` | `6` | Target average number of neighbors per node. |
-| `Topology` | `Erdos-Renyi`, `Watts-Strogatz`, `Barabasi-Albert`, `Scale-Free`, `Directed Influencers` | `Erdos-Renyi` | Network generation model. |
-| `Influencer fraction` | `0.01` to `0.25` | `0.06` | Only shown for `Directed Influencers`; fraction of nodes with outgoing influence and zero incoming social ties. |
+| `Topology` | `Erdos-Renyi`, `Watts-Strogatz`, `Barabasi-Albert`, `Scale-Free`, `Twitter Higgs retweets` | `Erdos-Renyi` | Network structure used for exposure paths. Synthetic options generate graphs; Twitter Higgs loads a real retweet topology. |
+| `Number of nodes` | `20` to `500` | `150` | Number of agents in a synthetic graph. |
+| `Sample users` | `50` to `500` | `250` | Number of sampled anonymized Twitter users when `Twitter Higgs retweets` is selected. |
+| `Average degree` | `1` to `30` | `6` | Target average number of neighbors per node for synthetic topologies. |
+| `Enable influencer layer` | checkbox | off | Only shown for `Barabasi-Albert`; marks high-degree BA nodes as influencers and orients influence edges. |
+| `Influencer fraction` | `0.01` to `0.25` | `0.06` | Only shown when the influencer layer is enabled. |
+| `Peers can influence influencers` | checkbox | off | Allows peer-to-influencer edges in addition to influencer-to-peer and influencer-to-influencer edges. |
+| `Minimum retweet weight` | `1` to `10` | `1` | Keeps only real retweet edges observed at least this many times. |
+| `Reverse retweets into influence flow` | checkbox | on | Converts `A retweets B` into `B -> A`. |
 
 ### Initial Condition
 
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `Initial infected` | `1` to `min(80, n_nodes)` | `5` | Number of infected seed nodes at `t=0`. |
-| `Seed mode` | `random`, `hubs` | `random` | Choose seeds randomly or from strongest influence hubs; directed graphs rank by out-degree. |
 | `Maximum steps` | `5` to `200` | `60` | Number of synchronous simulation updates. |
 | `Random seed` | integer `>= 0` | `42` | Reproduces the network and stochastic draws. |
 
@@ -126,10 +159,10 @@ If you do not activate the virtual environment, run Streamlit directly from it:
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `Contagion model` | `simple`, `threshold` | `simple` | Selects probabilistic simple contagion or complex threshold contagion. |
-| `Simple model type` | `SIR`, `SIS`, `SEIR` | `SIR` | State-transition variant used when `model=simple`. |
-| `beta` | `0.00` to `1.00` | `0.30` | Per-neighbor transmission probability in simple contagion. |
-| `sigma` | `0.00` to `1.00` | `0.35` | Probability that an exposed SEIR node becomes infected per step. |
-| `theta` | `0.00` to `1.00` | `0.25` | Infected-neighbor fraction needed for threshold adoption. |
+| `Simple model type` | `SIR`, `SIS`, `SEIR` | `SIR` | State-transition variant; only shown when `model=simple`. |
+| `beta` | `0.00` to `1.00` | `0.30` | Per-neighbor transmission probability; only shown for simple contagion. |
+| `sigma` | `0.00` to `1.00` | `0.35` | Probability that an exposed SEIR node becomes infected per step; only shown for `SEIR`. |
+| `theta` | `0.00` to `1.00` | `0.25` | Infected-neighbor fraction needed for threshold adoption; only shown for threshold contagion. |
 | `gamma` | `0.00` to `1.00` | `0.10` | Probability that an infected node recovers per step. |
 | `external_noise` | `0.000` to `0.100` | `0.000` | Outside adoption probability per susceptible node per step. |
 
@@ -145,12 +178,15 @@ theta sweep: 0.1, 0.25, 0.4
 ```text
 social-contagion/
 ├── app.py
+├── scripts/
+│   └── download_higgs_twitter.py
 ├── requirements.txt
 ├── README.md
 └── src/
     ├── __init__.py
     ├── simulation.py
     ├── networks.py
+    ├── twitter_higgs.py
     ├── plots.py
     └── web_stage.py
 ```
@@ -160,6 +196,94 @@ social-contagion/
 The app uses synchronous updates: every node reads the state at time `t`, then
 all node states are written to `t+1` together.
 
+## Topology Notes
+
+`n` is the number of nodes and `k_bar` is the requested average degree.
+
+### Erdos-Renyi
+
+```text
+G(n, p)
+p = k_bar / (n - 1)
+E[M] = p * n * (n - 1) / 2
+E[k_i] = p * (n - 1)
+```
+
+Every possible undirected edge is sampled independently. This is the neutral
+baseline: no explicit high-degree mechanism, no spatial clustering, no
+preferential attachment.
+
+### Watts-Strogatz
+
+```text
+k_ring = nearest valid even degree to k_bar
+p_rewire = 0.1
+E[k_i] approx k_ring
+```
+
+The graph starts as a ring lattice and rewires edges with probability
+`p_rewire`. It keeps local neighborhoods while adding long-range shortcuts,
+which models small-world structure.
+
+### Barabasi-Albert
+
+```text
+m = max(1, round(k_bar / 2))
+P(new edge attaches to i) = k_i / sum_j(k_j)
+E[k] approx 2m
+P(k) ~ k^-3
+```
+
+New nodes attach preferentially to nodes that already have high degree. This
+creates the heavy-tailed structure used by the optional influencer layer.
+
+### Influencer Layer on Barabasi-Albert
+
+```text
+F = max(1, round(influencer_fraction * n))
+I = top F nodes by BA degree
+u -> v means u can influence v
+i, j in I => i <-> j when the BA edge exists
+peer -> influencer only if enabled
+```
+
+This is not a separate topology. The base graph is still Barabasi-Albert. The
+layer marks the highest-degree BA nodes as influencers and then orients each BA
+edge:
+
+- influencer-peer edges always include `influencer -> peer`;
+- influencer-influencer edges are bidirectional;
+- peer-peer edges are bidirectional;
+- peer-influencer edges are included only when `Peers can influence influencers`
+  is enabled.
+
+### Scale-Free
+
+```text
+P(k) proportional to k^-alpha
+M_target approx n * k_bar / 2
+P(extra source = i) = (k_i + 1) / sum_j(k_j + 1)
+```
+
+The app starts from a NetworkX scale-free graph, converts it to a simple
+undirected graph, then adds preferentially weighted edges until it roughly
+matches the requested average degree.
+
+### Twitter Higgs Retweets
+
+```text
+A retweets B => B -> A
+w_BA = observed retweet count
+initial seeds = earliest observed Higgs activity in the sampled graph
+influencers = top sampled nodes by weighted out-degree
+```
+
+This mode uses the SNAP Higgs Twitter retweet network and activity log. The
+published user IDs are anonymized. The app samples a presentation-sized
+subgraph around early topic users and high-outdegree retweeted accounts.
+
+## Contagion Notes
+
 For node `i`:
 
 ```text
@@ -168,12 +292,10 @@ k_i    = total number of neighbors
 epsilon = external_noise
 ```
 
-In undirected graphs, neighbors are ordinary two-way ties. In `Directed
-Influencers`, an edge `u -> v` means `u` can influence `v`; therefore `m_i(t)`
-counts infected predecessors and `k_i` is the in-degree of node `i`.
-Influencer nodes have no incoming social ties, so they are not infected by
-network contagion. They can still be initial seeds or adopt through
-`external_noise`.
+In undirected graphs, neighbors are ordinary two-way ties. In directed
+influence graphs, including the Barabasi-Albert influencer layer and Twitter
+Higgs retweets, an edge `u -> v` means `u` can influence `v`; therefore
+`m_i(t)` counts infected predecessors and `k_i` is the in-degree of node `i`.
 
 Simple contagion uses the per-step neighbor probability:
 
@@ -205,6 +327,7 @@ step.
 infected or exposed at least once, which keeps the metric meaningful for SIR,
 SIS, SEIR, and threshold cascades.
 
-The in-app `Mathematics` tab shows these equations, the current parameter
-values, a rough simple-contagion early-spread heuristic, and peak-step pressure
-metrics computed from the active network.
+The in-app `Topologies` tab shows topology equations and graph metrics. The
+`Mathematics` tab shows contagion equations, current parameter values, a rough
+simple-contagion early-spread heuristic, and peak-step pressure metrics computed
+from the active network.

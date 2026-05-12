@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import matplotlib.pyplot as plt
 import streamlit as st
 
-from src.networks import DIRECTED_INFLUENCERS, TOPOLOGIES, generate_network
+from src.networks import BARABASI_ALBERT, TOPOLOGIES, generate_network
 from src.plots import (
     compute_layout,
     figure_to_png_bytes,
@@ -21,12 +23,20 @@ from src.simulation import (
     run_simulation,
     run_theta_sweep,
 )
+from src.twitter_higgs import (
+    HIGGS_TWITTER_TOPOLOGY,
+    download_higgs_data,
+    load_higgs_retweet_sample,
+    missing_higgs_data_files,
+    observed_activity_history,
+)
 from src.web_stage import build_stage_html
 
 
 BETA_SWEEP = [0.1, 0.2, 0.3, 0.4, 0.5]
 THETA_SWEEP = [0.1, 0.25, 0.4]
-APP_STATE_VERSION = 5
+APP_STATE_VERSION = 9
+APP_TOPOLOGIES = (*TOPOLOGIES, HIGGS_TWITTER_TOPOLOGY)
 
 
 def main() -> None:
@@ -46,7 +56,11 @@ def main() -> None:
         or "simulation_payload" not in st.session_state
         or st.session_state.get("app_state_version") != APP_STATE_VERSION
     ):
-        st.session_state["simulation_payload"] = _run_model(params)
+        try:
+            st.session_state["simulation_payload"] = _run_model(params)
+        except FileNotFoundError as error:
+            st.error(str(error))
+            st.stop()
         st.session_state["app_state_version"] = APP_STATE_VERSION
 
     payload = st.session_state["simulation_payload"]
@@ -75,18 +89,53 @@ def _sidebar_controls() -> dict:
     stage_width = st.sidebar.slider("Stage width", 70, 100, 100, 5)
 
     st.sidebar.header("Network")
-    n_nodes = st.sidebar.slider("Number of nodes", 20, 500, 150, 10)
-    average_degree = st.sidebar.slider("Average degree", 1, 30, 6, 1)
-    topology = st.sidebar.selectbox("Topology", TOPOLOGIES)
+    topology = st.sidebar.selectbox("Topology", APP_TOPOLOGIES)
+    influencer_layer = False
+    average_degree = 6
     influencer_fraction = 0.06
-    if topology == DIRECTED_INFLUENCERS:
-        influencer_fraction = st.sidebar.slider(
-            "Influencer fraction",
-            0.01,
-            0.25,
-            0.06,
-            0.01,
+    influencers_receive_from_peers = False
+    min_edge_weight = 1
+    reverse_retweets = True
+
+    if topology == HIGGS_TWITTER_TOPOLOGY:
+        n_nodes = st.sidebar.slider("Sample users", 50, 500, 250, 25)
+        min_edge_weight = st.sidebar.slider("Minimum retweet weight", 1, 10, 1, 1)
+        reverse_retweets = st.sidebar.checkbox(
+            "Reverse retweets into influence flow",
+            value=True,
         )
+        missing_files = missing_higgs_data_files()
+        if missing_files:
+            st.sidebar.warning("Higgs Twitter data is not available locally.")
+            if st.sidebar.button("Download Higgs data", width="stretch"):
+                with st.spinner("Downloading SNAP Higgs Twitter data..."):
+                    download_higgs_data()
+                st.rerun()
+        else:
+            st.sidebar.caption(
+                "Using SNAP Higgs Twitter retweets and activity from July 1-7, 2012."
+            )
+    else:
+        n_nodes = st.sidebar.slider("Number of nodes", 20, 500, 150, 10)
+        average_degree = st.sidebar.slider("Average degree", 1, 30, 6, 1)
+        if topology == BARABASI_ALBERT:
+            influencer_layer = st.sidebar.checkbox("Enable influencer layer", value=False)
+            if influencer_layer:
+                influencer_fraction = st.sidebar.slider(
+                    "Influencer fraction",
+                    0.01,
+                    0.25,
+                    0.06,
+                    0.01,
+                )
+                influencers_receive_from_peers = st.sidebar.checkbox(
+                    "Peers can influence influencers",
+                    value=False,
+                )
+        else:
+            st.sidebar.caption(
+                "Synthetic mode builds reproducible NetworkX graphs from sliders."
+            )
 
     st.sidebar.header("Initial condition")
     initial_infected = st.sidebar.slider(
@@ -96,16 +145,24 @@ def _sidebar_controls() -> dict:
         min(5, n_nodes),
         1,
     )
-    seed_mode = st.sidebar.radio("Seed mode", ["random", "hubs"], horizontal=True)
     max_steps = st.sidebar.slider("Maximum steps", 5, 200, 60, 5)
     random_seed = st.sidebar.number_input("Random seed", min_value=0, value=42, step=1)
 
     st.sidebar.header("Model")
     model = st.sidebar.radio("Contagion model", ["simple", "threshold"], horizontal=True)
-    simple_variant = st.sidebar.selectbox("Simple model type", ["SIR", "SIS", "SEIR"])
-    beta = st.sidebar.slider("beta", 0.0, 1.0, 0.30, 0.01)
-    sigma = st.sidebar.slider("sigma", 0.0, 1.0, 0.35, 0.01)
-    theta = st.sidebar.slider("theta", 0.0, 1.0, 0.25, 0.01)
+    simple_variant = "SIR"
+    beta = 0.30
+    sigma = 0.35
+    theta = 0.25
+
+    if model == "simple":
+        simple_variant = st.sidebar.selectbox("Simple model type", ["SIR", "SIS", "SEIR"])
+        beta = st.sidebar.slider("beta", 0.0, 1.0, 0.30, 0.01)
+        if simple_variant == "SEIR":
+            sigma = st.sidebar.slider("sigma", 0.0, 1.0, 0.35, 0.01)
+    else:
+        theta = st.sidebar.slider("theta", 0.0, 1.0, 0.25, 0.01)
+
     gamma = st.sidebar.slider("gamma", 0.0, 1.0, 0.10, 0.01)
     external_noise = st.sidebar.slider("external_noise", 0.0, 0.10, 0.00, 0.001)
 
@@ -113,9 +170,13 @@ def _sidebar_controls() -> dict:
         "n_nodes": n_nodes,
         "average_degree": average_degree,
         "topology": topology,
+        "influencer_layer": influencer_layer,
         "influencer_fraction": influencer_fraction,
+        "influencers_receive_from_peers": influencers_receive_from_peers,
+        "min_edge_weight": min_edge_weight,
+        "reverse_retweets": reverse_retweets,
         "initial_infected": initial_infected,
-        "seed_mode": seed_mode,
+        "seed_mode": "random",
         "max_steps": max_steps,
         "random_seed": int(random_seed),
         "model": model,
@@ -334,21 +395,56 @@ def _show_header() -> None:
         <div class="hero-panel">
             <div class="hero-kicker">Complex Systems Studio</div>
             <h1>Social Contagion Simulator</h1>
-            <p>Model cascades across random, small-world, scale-free and directed influencer networks with a polished interactive simulation built for presentation.</p>
+            <p>Model cascades across synthetic networks or a real Twitter retweet sample from the SNAP Higgs rumor dataset.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def _run_model(params: dict) -> dict:
-    graph = generate_network(
-        n_nodes=params["n_nodes"],
-        average_degree=params["average_degree"],
-        topology=params["topology"],
-        random_seed=params["random_seed"],
-        influencer_fraction=params["influencer_fraction"],
+@st.cache_resource(show_spinner=False)
+def _load_higgs_sample(
+    sample_size: int,
+    initial_seed_count: int,
+    random_seed: int,
+    min_edge_weight: int,
+    reverse_retweets: bool,
+):
+    return load_higgs_retweet_sample(
+        sample_size=sample_size,
+        initial_seed_count=initial_seed_count,
+        random_seed=random_seed,
+        min_edge_weight=min_edge_weight,
+        reverse_retweets=reverse_retweets,
     )
+
+
+def _run_model(params: dict) -> dict:
+    initial_infected_nodes = None
+    higgs_metadata = None
+
+    if params["topology"] == HIGGS_TWITTER_TOPOLOGY:
+        higgs_sample = _load_higgs_sample(
+            params["n_nodes"],
+            params["initial_infected"],
+            params["random_seed"],
+            params["min_edge_weight"],
+            params["reverse_retweets"],
+        )
+        graph = higgs_sample.graph
+        initial_infected_nodes = higgs_sample.initial_infected
+        higgs_metadata = higgs_sample.metadata
+    else:
+        graph = generate_network(
+            n_nodes=params["n_nodes"],
+            average_degree=params["average_degree"],
+            topology=params["topology"],
+            random_seed=params["random_seed"],
+            influencer_layer=params["influencer_layer"],
+            influencer_fraction=params["influencer_fraction"],
+            influencers_receive_from_peers=params["influencers_receive_from_peers"],
+        )
+
     pos = compute_layout(graph, params["random_seed"])
 
     result = run_simulation(
@@ -364,6 +460,7 @@ def _run_model(params: dict) -> dict:
         theta=params["theta"],
         simple_variant=params["simple_variant"],
         external_noise=params["external_noise"],
+        initial_infected_nodes=initial_infected_nodes,
     )
 
     beta_sweep = run_beta_sweep(
@@ -377,6 +474,7 @@ def _run_model(params: dict) -> dict:
         sigma=params["sigma"],
         simple_variant=params["simple_variant"],
         external_noise=params["external_noise"],
+        initial_infected_nodes=initial_infected_nodes,
     )
     theta_sweep = run_theta_sweep(
         graph=graph,
@@ -387,6 +485,7 @@ def _run_model(params: dict) -> dict:
         random_seed=params["random_seed"],
         gamma=params["gamma"],
         external_noise=params["external_noise"],
+        initial_infected_nodes=initial_infected_nodes,
     )
 
     return {
@@ -397,6 +496,7 @@ def _run_model(params: dict) -> dict:
         "theta_sweep": theta_sweep,
         "topology": params["topology"],
         "params": params.copy(),
+        "higgs_metadata": higgs_metadata,
     }
 
 
@@ -408,6 +508,95 @@ def _show_metrics(metrics: dict[str, float], graph) -> None:
     cols[2].metric("Peak time", f"{int(metrics['time_to_peak'])} steps")
     cols[3].metric("Active E+I", f"{metrics['final_active_fraction']:.1%}")
     cols[4].metric("Edges", f"{graph.number_of_edges():,}")
+
+
+def _show_higgs_summary(metadata: dict[str, object]) -> None:
+    st.caption(
+        "Real-data mode uses the SNAP Higgs Twitter dataset. Retweet edges are "
+        "reversed by default so an edge points from the retweeted account to "
+        "the account that retweeted it."
+    )
+    cols = st.columns(4)
+    cols[0].metric("Raw retweet edges", f"{metadata['raw_retweet_edges']:,}")
+    cols[1].metric("Raw activity events", f"{metadata['raw_activity_events']:,}")
+    cols[2].metric("Sample users", f"{metadata['sample_nodes']:,}")
+    cols[3].metric("Sample edges", f"{metadata['sample_edges']:,}")
+
+
+def _show_higgs_data_tab(graph, result, payload) -> None:
+    metadata = payload["higgs_metadata"]
+    params = payload["params"]
+    st.subheader("Twitter Higgs data")
+    st.markdown(
+        f"Source: [{metadata['source_name']}]({metadata['source_url']}). "
+        f"{metadata['citation']}"
+    )
+    st.caption(
+        "The raw users are anonymized by SNAP. The app keeps those anonymized "
+        "IDs as node attributes and relabels the sampled graph to contiguous "
+        "integer nodes for fast simulation."
+    )
+
+    source_rows = [
+        {"Field": "Topology", "Value": str(metadata["topology_label"])},
+        {
+            "Field": "Direction",
+            "Value": (
+                "retweeted user -> retweeter"
+                if metadata["reverse_retweets"]
+                else "retweeter -> retweeted user"
+            ),
+        },
+        {"Field": "Minimum retweet weight", "Value": str(metadata["min_edge_weight"])},
+        {
+            "Field": "First sample activity",
+            "Value": _format_timestamp(metadata["first_timestamp"]),
+        },
+        {
+            "Field": "Last sample activity",
+            "Value": _format_timestamp(metadata["last_timestamp"]),
+        },
+    ]
+    st.dataframe(source_rows, width="stretch", hide_index=True)
+
+    st.markdown("#### Observed vs simulated adoption")
+    observed = observed_activity_history(graph, params["max_steps"])
+    comparison = result.history[["t", "ever_infected"]].merge(
+        observed,
+        on="t",
+        how="left",
+    )
+    comparison["observed_adopters"] = comparison["observed_adopters"].ffill().fillna(0)
+    st.line_chart(
+        comparison,
+        x="t",
+        y=["ever_infected", "observed_adopters"],
+        height=280,
+    )
+
+    st.markdown("#### Initial real seeds")
+    seed_rows = []
+    for node in result.initial_infected:
+        data = graph.nodes[node]
+        seed_rows.append(
+            {
+                "Graph node": int(node),
+                "Anonymized Twitter ID": int(data["twitter_user_id"]),
+                "Role": data.get("role", "peer"),
+                "First seen": _format_timestamp(data.get("first_seen_timestamp")),
+            }
+        )
+    st.dataframe(seed_rows, width="stretch", hide_index=True)
+
+    with st.expander("Raw interaction counts"):
+        st.dataframe(
+            [
+                {"Interaction": interaction, "Events": count}
+                for interaction, count in metadata["interaction_counts"].items()
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _show_snapshots(graph, result, pos) -> None:
@@ -448,12 +637,36 @@ def _show_dynamic_simulation(
 
 def _show_analysis_tabs(graph, result, pos, payload) -> None:
     st.markdown('<div class="section-label">Analysis</div>', unsafe_allow_html=True)
-    overview_tab, snapshots_tab, sweeps_tab, math_tab, export_tab = st.tabs(
-        ["Overview", "Snapshots", "Parameter sweeps", "Mathematics", "Export"]
-    )
+    if payload.get("higgs_metadata"):
+        (
+            overview_tab,
+            snapshots_tab,
+            sweeps_tab,
+            topologies_tab,
+            math_tab,
+            data_tab,
+            export_tab,
+        ) = st.tabs(
+            [
+                "Overview",
+                "Snapshots",
+                "Parameter sweeps",
+                "Topologies",
+                "Mathematics",
+                "Twitter data",
+                "Export",
+            ]
+        )
+    else:
+        overview_tab, snapshots_tab, sweeps_tab, topologies_tab, math_tab, export_tab = st.tabs(
+            ["Overview", "Snapshots", "Parameter sweeps", "Topologies", "Mathematics", "Export"]
+        )
+        data_tab = None
 
     with overview_tab:
         _show_metrics(result.metrics, graph)
+        if payload.get("higgs_metadata"):
+            _show_higgs_summary(payload["higgs_metadata"])
         _show_curves(result)
 
     with snapshots_tab:
@@ -462,8 +675,15 @@ def _show_analysis_tabs(graph, result, pos, payload) -> None:
     with sweeps_tab:
         _show_sweeps(payload["beta_sweep"], payload["theta_sweep"])
 
+    with topologies_tab:
+        _show_topology_math(graph, payload["params"])
+
     with math_tab:
         _show_model_math(graph, result, payload["params"])
+
+    if data_tab is not None:
+        with data_tab:
+            _show_higgs_data_tab(graph, result, payload)
 
     with export_tab:
         _show_export_button(graph, result, pos)
@@ -562,6 +782,142 @@ def _show_model_math(graph, result, params: dict) -> None:
         _show_threshold_model_math(params)
 
 
+def _show_topology_math(graph, params: dict) -> None:
+    st.subheader("Topology mathematics")
+    st.caption(
+        "These formulas describe how the network itself is generated before "
+        "contagion dynamics start."
+    )
+
+    topology_metrics = _topology_metrics(graph)
+    metric_cols = st.columns(5 if graph.is_directed() else 4)
+    metric_cols[0].metric("Nodes", f"{topology_metrics['nodes']:,}")
+    metric_cols[1].metric("Edges", f"{topology_metrics['edges']:,}")
+    metric_cols[2].metric("Density", f"{topology_metrics['density']:.3f}")
+    metric_cols[3].metric(topology_metrics["degree_label"], f"{topology_metrics['mean_degree']:.2f}")
+    if graph.is_directed():
+        metric_cols[4].metric("Mean out-degree", f"{topology_metrics['mean_out_degree']:.2f}")
+
+    st.markdown(f"**Current topology:** `{params['topology']}`")
+    if params["influencer_layer"]:
+        st.markdown("**Influencer layer:** `enabled`")
+    _show_active_topology_equations(params)
+
+    with st.expander("Equations for all topologies"):
+        er_tab, ws_tab, ba_tab, sf_tab, influencer_tab, twitter_tab = st.tabs(
+            [
+                "Erdos-Renyi",
+                "Watts-Strogatz",
+                "Barabasi-Albert",
+                "Scale-Free",
+                "Influencer Layer",
+                "Twitter Higgs",
+            ]
+        )
+        with er_tab:
+            _show_erdos_renyi_math()
+        with ws_tab:
+            _show_watts_strogatz_math()
+        with ba_tab:
+            _show_barabasi_albert_math()
+        with sf_tab:
+            _show_scale_free_math()
+        with influencer_tab:
+            _show_barabasi_influencer_layer_math()
+        with twitter_tab:
+            _show_twitter_higgs_math()
+
+
+def _show_active_topology_equations(params: dict) -> None:
+    topology = params["topology"]
+    if topology == "Erdos-Renyi":
+        _show_erdos_renyi_math()
+    elif topology == "Watts-Strogatz":
+        _show_watts_strogatz_math()
+    elif topology == BARABASI_ALBERT:
+        _show_barabasi_albert_math()
+        if params["influencer_layer"]:
+            _show_barabasi_influencer_layer_math()
+    elif topology == "Scale-Free":
+        _show_scale_free_math()
+    elif topology == HIGGS_TWITTER_TOPOLOGY:
+        _show_twitter_higgs_math()
+
+
+def _show_erdos_renyi_math() -> None:
+    st.markdown("**Erdos-Renyi random graph**")
+    st.latex(r"G(n,p),\qquad p=\frac{\bar{k}}{n-1}")
+    st.latex(r"\mathbb{E}[M]=p\binom{n}{2},\qquad \mathbb{E}[k_i]=p(n-1)")
+    st.markdown(
+        "Every possible undirected edge is sampled independently. It is useful "
+        "as a baseline because it has no explicit high-degree mechanism or "
+        "local clustering mechanism."
+    )
+
+
+def _show_watts_strogatz_math() -> None:
+    st.markdown("**Watts-Strogatz small-world graph**")
+    st.latex(r"k_{\mathrm{ring}}=\mathrm{nearest\ even}(\bar{k}),\qquad p_r=0.1")
+    st.latex(r"\mathbb{E}[k_i]\approx k_{\mathrm{ring}}")
+    st.markdown(
+        "The graph starts as a ring lattice, then each edge is rewired with "
+        "probability `p_r`. This keeps local neighborhoods but adds shortcuts."
+    )
+
+
+def _show_barabasi_albert_math() -> None:
+    st.markdown("**Barabasi-Albert preferential attachment**")
+    st.latex(r"m=\max(1,\mathrm{round}(\bar{k}/2))")
+    st.latex(r"P(\mathrm{new\ edge}\rightarrow i)=\frac{k_i}{\sum_j k_j}")
+    st.latex(r"\mathbb{E}[k]\approx 2m,\qquad P(k)\sim k^{-3}")
+    st.markdown(
+        "New nodes attach preferentially to already connected nodes, creating "
+        "high-degree nodes that can become structurally important spreaders."
+    )
+
+
+def _show_scale_free_math() -> None:
+    st.markdown("**Scale-Free graph**")
+    st.latex(r"P(k)\propto k^{-\alpha}")
+    st.latex(r"M_{\mathrm{target}}\approx \frac{n\bar{k}}{2}")
+    st.latex(r"P(\mathrm{extra\ source}=i)=\frac{k_i+1}{\sum_j(k_j+1)}")
+    st.markdown(
+        "The app starts from a NetworkX scale-free graph, converts it to a "
+        "simple undirected graph, then adds preferentially weighted edges until "
+        "it roughly matches the requested average degree."
+    )
+
+
+def _show_barabasi_influencer_layer_math() -> None:
+    st.markdown("**Influencer layer on Barabasi-Albert**")
+    st.latex(r"F=\max(1,\mathrm{round}(fn))")
+    st.latex(r"\mathcal{I}=\mathrm{top}\ F\ \mathrm{nodes\ by\ BA\ degree}")
+    st.latex(r"u\rightarrow v\quad\Rightarrow\quad u\ \mathrm{can\ influence}\ v")
+    st.latex(r"i,j\in\mathcal{I}\Rightarrow i\leftrightarrow j\ \mathrm{when\ linked}")
+    st.latex(r"p\rightarrow i,\ i\in\mathcal{I}\ \mathrm{only\ if\ enabled}")
+    st.markdown(
+        "The base topology remains Barabasi-Albert. The influencer layer marks "
+        "the highest-degree BA nodes as influencers, then orients each base edge "
+        "according to influence direction. Influencers can influence peers and "
+        "other linked influencers; peer-to-influencer influence is controlled by "
+        "the sidebar checkbox."
+    )
+
+
+def _show_twitter_higgs_math() -> None:
+    st.markdown("**Twitter Higgs retweet graph**")
+    st.latex(r"A\ \mathrm{retweets}\ B\quad\Rightarrow\quad B\rightarrow A")
+    st.latex(r"w_{BA}=\mathrm{number\ of\ observed\ retweets}")
+    st.latex(r"\mathcal{I}=\mathrm{top\ sampled\ nodes\ by\ weighted\ outdegree}")
+    st.markdown(
+        "The real-data mode uses the SNAP Higgs retweet network. The observed "
+        "retweet edge is reversed for information-flow simulation, so incoming "
+        "predecessors are the accounts that can expose a node to the topic. "
+        "Initial infected nodes come from the earliest observed Higgs activity "
+        "inside the sampled graph."
+    )
+
+
 def _show_current_math_context(graph, result, params: dict) -> None:
     peak_step = int(result.metrics["peak_index"])
     profile = _contagion_profile(graph, result.states[peak_step], params)
@@ -650,13 +1006,46 @@ def _show_current_math_context(graph, result, params: dict) -> None:
             "Meaning": "Controls reproducible network and random draws",
         },
     ]
-    if graph.is_directed():
+    if graph.is_directed() and params["topology"] == HIGGS_TWITTER_TOPOLOGY:
+        parameter_rows.insert(
+            1,
+            {
+                "Parameter": "data_source",
+                "Current value": "SNAP Higgs Twitter",
+                "Meaning": "Real retweet/activity data used for the exposure graph",
+            },
+        )
+        parameter_rows.insert(
+            2,
+            {
+                "Parameter": "reverse_retweets",
+                "Current value": str(params["reverse_retweets"]),
+                "Meaning": "Whether A retweets B is modeled as B influences A",
+            },
+        )
+        parameter_rows.insert(
+            3,
+            {
+                "Parameter": "min_edge_weight",
+                "Current value": str(params["min_edge_weight"]),
+                "Meaning": "Minimum observed retweet count kept in the sample",
+            },
+        )
+    elif graph.is_directed():
         parameter_rows.insert(
             1,
             {
                 "Parameter": "influencer_fraction",
                 "Current value": f"{params['influencer_fraction']:.2f}",
-                "Meaning": "Fraction of nodes with outgoing influence and zero incoming ties",
+                "Meaning": "Fraction of BA nodes marked as influencers",
+            },
+        )
+        parameter_rows.insert(
+            2,
+            {
+                "Parameter": "peers_influence_influencers",
+                "Current value": str(params["influencers_receive_from_peers"]),
+                "Meaning": "Whether peer nodes can send influence into influencer nodes",
             },
         )
     st.dataframe(parameter_rows, width="stretch", hide_index=True)
@@ -796,6 +1185,34 @@ def _average_degree(graph) -> float:
     return 2.0 * graph.number_of_edges() / graph.number_of_nodes()
 
 
+def _topology_metrics(graph) -> dict[str, float | int | str]:
+    n_nodes = graph.number_of_nodes()
+    n_edges = graph.number_of_edges()
+    if graph.is_directed():
+        max_edges = n_nodes * (n_nodes - 1)
+        mean_in_degree = n_edges / n_nodes if n_nodes else 0.0
+        mean_out_degree = mean_in_degree
+        return {
+            "nodes": n_nodes,
+            "edges": n_edges,
+            "density": n_edges / max_edges if max_edges else 0.0,
+            "degree_label": "Mean in-degree",
+            "mean_degree": mean_in_degree,
+            "mean_out_degree": mean_out_degree,
+        }
+
+    max_edges = n_nodes * (n_nodes - 1) / 2
+    mean_degree = 2.0 * n_edges / n_nodes if n_nodes else 0.0
+    return {
+        "nodes": n_nodes,
+        "edges": n_edges,
+        "density": n_edges / max_edges if max_edges else 0.0,
+        "degree_label": "Mean degree",
+        "mean_degree": mean_degree,
+        "mean_out_degree": 0.0,
+    }
+
+
 def _expected_steps(probability: float) -> float:
     if probability <= 0:
         return float("inf")
@@ -832,6 +1249,14 @@ def _influencer_count(graph) -> int:
     return sum(
         1 for node in graph.nodes
         if graph.nodes[node].get("role") == "influencer"
+    )
+
+
+def _format_timestamp(timestamp) -> str:
+    if timestamp is None:
+        return "not observed"
+    return datetime.fromtimestamp(int(timestamp), tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
     )
 
 

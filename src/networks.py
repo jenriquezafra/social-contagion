@@ -6,14 +6,13 @@ import networkx as nx
 import numpy as np
 
 
-DIRECTED_INFLUENCERS = "Directed Influencers"
+BARABASI_ALBERT = "Barabasi-Albert"
 
 TOPOLOGIES = (
     "Erdos-Renyi",
     "Watts-Strogatz",
-    "Barabasi-Albert",
+    BARABASI_ALBERT,
     "Scale-Free",
-    DIRECTED_INFLUENCERS,
 )
 
 
@@ -22,7 +21,9 @@ def generate_network(
     average_degree: int,
     topology: str,
     random_seed: int,
+    influencer_layer: bool = False,
     influencer_fraction: float = 0.06,
+    influencers_receive_from_peers: bool = False,
 ) -> nx.Graph:
     """Create a reproducible NetworkX graph with integer node labels."""
     if n_nodes < 2:
@@ -41,7 +42,7 @@ def generate_network(
             p=0.1,
             seed=random_seed,
         )
-    elif topology == "Barabasi-Albert":
+    elif topology == BARABASI_ALBERT:
         # BA graphs have average degree close to 2m.
         edges_per_new_node = max(1, min(round(degree / 2), n_nodes - 1))
         graph = nx.barabasi_albert_graph(
@@ -49,15 +50,14 @@ def generate_network(
             edges_per_new_node,
             seed=random_seed,
         )
+        if influencer_layer:
+            graph = _barabasi_albert_influence_layer(
+                graph=graph,
+                influencer_fraction=influencer_fraction,
+                influencers_receive_from_peers=influencers_receive_from_peers,
+            )
     elif topology == "Scale-Free":
         graph = _scale_free_graph(n_nodes, degree, random_seed)
-    elif topology == DIRECTED_INFLUENCERS:
-        graph = _directed_influencer_graph(
-            n_nodes=n_nodes,
-            degree=degree,
-            random_seed=random_seed,
-            influencer_fraction=influencer_fraction,
-        )
     else:
         raise ValueError(f"Unknown topology: {topology}")
 
@@ -98,77 +98,58 @@ def _scale_free_graph(n_nodes: int, degree: int, random_seed: int) -> nx.Graph:
     return graph
 
 
-def _directed_influencer_graph(
-    n_nodes: int,
-    degree: int,
-    random_seed: int,
+def _barabasi_albert_influence_layer(
+    graph: nx.Graph,
     influencer_fraction: float,
+    influencers_receive_from_peers: bool,
 ) -> nx.DiGraph:
-    """Create a directed graph where influencer nodes broadcast but do not listen."""
-    rng = np.random.default_rng(random_seed)
+    """Orient a BA graph into a directed influence graph with influencer nodes."""
+    n_nodes = graph.number_of_nodes()
     influencer_count = int(round(n_nodes * influencer_fraction))
     influencer_count = max(1, min(influencer_count, n_nodes - 1))
-
     influencer_nodes = set(
-        int(node)
-        for node in rng.choice(n_nodes, size=influencer_count, replace=False).tolist()
+        node for node, _degree in sorted(
+            graph.degree,
+            key=lambda item: (-item[1], item[0]),
+        )[:influencer_count]
     )
-    peer_nodes = [node for node in range(n_nodes) if node not in influencer_nodes]
 
-    graph = nx.DiGraph()
-    graph.add_nodes_from(range(n_nodes))
+    influence_graph = nx.DiGraph()
+    influence_graph.add_nodes_from(graph.nodes)
     nx.set_node_attributes(
-        graph,
+        influence_graph,
         {
             node: "influencer" if node in influencer_nodes else "peer"
             for node in graph.nodes
         },
         "role",
     )
-    graph.graph["influencer_count"] = influencer_count
-    graph.graph["influencer_fraction"] = influencer_count / n_nodes
+    influence_graph.graph["influencer_layer"] = True
+    influence_graph.graph["base_topology"] = BARABASI_ALBERT
+    influence_graph.graph["influencer_count"] = influencer_count
+    influence_graph.graph["influencer_fraction"] = influencer_count / n_nodes
+    influence_graph.graph["influencers_receive_from_peers"] = influencers_receive_from_peers
 
-    if not peer_nodes:
-        return graph
+    for source, target in graph.edges:
+        source_is_influencer = source in influencer_nodes
+        target_is_influencer = target in influencer_nodes
 
-    source_budget = max(1, min(degree, n_nodes - 1))
-    influencer_budget = max(1, round(source_budget * 0.35))
-    influencer_budget = min(influencer_budget, len(influencer_nodes))
-    peer_budget = max(0, source_budget - influencer_budget)
+        if source_is_influencer and target_is_influencer:
+            influence_graph.add_edge(source, target)
+            influence_graph.add_edge(target, source)
+        elif source_is_influencer:
+            influence_graph.add_edge(source, target)
+            if influencers_receive_from_peers:
+                influence_graph.add_edge(target, source)
+        elif target_is_influencer:
+            influence_graph.add_edge(target, source)
+            if influencers_receive_from_peers:
+                influence_graph.add_edge(source, target)
+        else:
+            influence_graph.add_edge(source, target)
+            influence_graph.add_edge(target, source)
 
-    for target in peer_nodes:
-        sources: list[int] = []
-
-        if influencer_budget:
-            sources.extend(
-                int(node)
-                for node in rng.choice(
-                    list(influencer_nodes),
-                    size=influencer_budget,
-                    replace=False,
-                ).tolist()
-            )
-
-        peer_candidates = [node for node in peer_nodes if node != target]
-        peer_source_count = min(peer_budget, len(peer_candidates))
-        if peer_source_count:
-            sources.extend(
-                int(node)
-                for node in rng.choice(
-                    peer_candidates,
-                    size=peer_source_count,
-                    replace=False,
-                ).tolist()
-            )
-
-        graph.add_edges_from((source, target) for source in sources)
-
-    for source in influencer_nodes:
-        if graph.out_degree[source] == 0:
-            target = int(rng.choice(peer_nodes))
-            graph.add_edge(source, target)
-
-    return graph
+    return influence_graph
 
 
 def _weighted_node_choice(graph: nx.Graph, rng: np.random.Generator) -> int:
