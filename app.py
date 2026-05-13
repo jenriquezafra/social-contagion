@@ -35,11 +35,11 @@ from src.twitter_higgs import (
 from src.web_stage import build_stage_html
 
 
-BETA_SWEEP = [0.1, 0.2, 0.3, 0.4, 0.5]
-SIGMA_SWEEP = [0.1, 0.25, 0.4, 0.6, 0.8]
-THETA_SWEEP = [0.1, 0.25, 0.4]
-GAMMA_SWEEP = [0.03, 0.06, 0.10, 0.16, 0.25]
-APP_STATE_VERSION = 15
+BETA_SWEEP = [round(value / 10, 1) for value in range(0, 11)]
+SIGMA_SWEEP = [round(value / 10, 1) for value in range(0, 11)]
+THETA_SWEEP = [round(value / 10, 1) for value in range(0, 11)]
+GAMMA_SWEEP = [round(value / 10, 1) for value in range(0, 11)]
+APP_STATE_VERSION = 17
 APP_TOPOLOGIES = (*TOPOLOGIES, HIGGS_TWITTER_TOPOLOGY)
 CUSTOM_EXPERIMENT = "Custom"
 EXPERIMENT_PRESETS = {
@@ -105,43 +105,13 @@ EXPERIMENT_PRESETS = {
             "external_noise": 0.002,
         },
     },
-    "Latent attention (SEIR)": {
-        "title": "Latent attention",
-        "model_family": "SEIR probabilistic",
-        "question": "What if users see the topic before they visibly participate?",
-        "interpretation": (
-            "Retweet exposure first creates a latent exposed state. Users then "
-            "activate later with sigma, so the visible wave is delayed."
-        ),
-        "expected": (
-            "Compared with SIR, the peak should arrive later and the exposed "
-            "curve should appear before the infected curve grows."
-        ),
-        "params": {
-            "topology": HIGGS_TWITTER_TOPOLOGY,
-            "n_nodes": 300,
-            "min_edge_weight": 1,
-            "reverse_retweets": True,
-            "initial_infected": 5,
-            "max_steps": 70,
-            "random_seed": 42,
-            "simple_variant": "SEIR",
-            "seir_adoption_rule": "probabilistic",
-            "beta": 0.18,
-            "sigma": 0.25,
-            "gamma": 0.06,
-            "external_noise": 0.002,
-            "complex_reinforcement": False,
-        },
-    },
-    "Political radicalization memory (SEIR)": {
-        "title": "Political radicalization memory",
+    "Repeated exposure memory (SEIR)": {
+        "title": "Repeated exposure memory",
         "model_family": "SEIR probabilistic + memory",
         "question": "What if repeated exposure accumulates before visible adoption?",
         "interpretation": (
-            "This is a stylized radicalization scenario: a person may not adopt "
-            "after one contact, but repeated exposure from influential accounts "
-            "builds latent pressure over time."
+            "A person may not adopt after one contact, but repeated exposure "
+            "from influential accounts can build latent pressure over time."
         ),
         "expected": (
             "Memory should make cascades less dependent on one-step exposure. "
@@ -165,34 +135,6 @@ EXPERIMENT_PRESETS = {
             "external_noise": 0.001,
             "complex_reinforcement": True,
             "reinforcement_memory": 0.85,
-        },
-    },
-    "Social proof threshold (SEIR)": {
-        "title": "Social proof threshold",
-        "model_family": "SEIR threshold",
-        "question": "What if adoption needs several simultaneous social signals?",
-        "interpretation": (
-            "A user only enters the exposed state after enough infected "
-            "predecessors are active at the same time. This models social proof."
-        ),
-        "expected": (
-            "The cascade should be more selective. Lower theta allows broad "
-            "spread; higher theta makes adoption concentrated around dense pockets."
-        ),
-        "params": {
-            "topology": HIGGS_TWITTER_TOPOLOGY,
-            "n_nodes": 300,
-            "min_edge_weight": 1,
-            "reverse_retweets": True,
-            "initial_infected": 8,
-            "max_steps": 70,
-            "random_seed": 42,
-            "simple_variant": "SEIR",
-            "seir_adoption_rule": "threshold",
-            "theta": 0.12,
-            "sigma": 0.30,
-            "gamma": 0.06,
-            "external_noise": 0.002,
         },
     },
 }
@@ -286,6 +228,10 @@ def _ensure_sidebar_state() -> None:
     st.session_state.setdefault("experiment_preset", CUSTOM_EXPERIMENT)
     st.session_state.setdefault("active_experiment_preset", CUSTOM_EXPERIMENT)
     st.session_state.setdefault("custom_control_values", CONTROL_DEFAULTS.copy())
+    if st.session_state["experiment_preset"] not in EXPERIMENT_PRESETS:
+        st.session_state["experiment_preset"] = CUSTOM_EXPERIMENT
+    if st.session_state["active_experiment_preset"] not in EXPERIMENT_PRESETS:
+        st.session_state["active_experiment_preset"] = CUSTOM_EXPERIMENT
     for key, value in CONTROL_DEFAULTS.items():
         st.session_state.setdefault(_control_key(key), value)
 

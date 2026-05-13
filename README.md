@@ -136,9 +136,7 @@ back to `Custom` while keeping your edited configuration.
 | --- | --- | --- |
 | `Breaking news broadcast (SIR)` | SIR | A public event spreads through retweets plus strong outside media/trending-topic pressure. |
 | `Recurring trend churn (SIS)` | SIS | Users can leave and re-enter attention cycles, as in recurring memes or consumer trends. |
-| `Latent attention (SEIR)` | SEIR probabilistic | Users can see a topic before visibly participating, delaying the observed wave. |
-| `Political radicalization memory (SEIR)` | SEIR with memory | Repeated exposure accumulates before visible adoption, using a stylized influencer-heavy network. |
-| `Social proof threshold (SEIR)` | SEIR threshold | Users enter exposure only after enough simultaneous social signals. |
+| `Repeated exposure memory (SEIR)` | SEIR with memory | Repeated exposure accumulates before visible adoption, using a stylized influencer-heavy network. |
 
 ### Appearance
 
@@ -192,6 +190,8 @@ SIR/SIS:   beta, gamma
 SEIR probabilistic: beta, sigma, gamma
 SEIR threshold:     theta, sigma, gamma
 ```
+
+Each sweep samples the full normalized parameter range from `0.0` to `1.0`.
 
 ## Project Structure
 
